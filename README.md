@@ -20,13 +20,18 @@ But with a sleek and contemporary appearance that's sure to captivate you!
 
 ## Requirements
 
-- `python>=3.10`
+- A C23 compiler
+- `pkg-config`, ncursesw, SQLite, libxml2, libzip, PCRE2, GdkPixbuf,
+  Poppler GLib, and Cairo
+- `mobitool` from [libmobi](https://github.com/bfabiszewski/libmobi) for
+  MOBI and AZW-family books
 
 ## Installation
 
-- Via pip: `pip install baca`
-- Via git: `pip install git+https://github.com/wustho/baca`
-- Via AUR: `yay -S baca-ereader-git`
+```sh
+make
+sudo make PREFIX=/usr/local install
+```
 
 ## Usage
 
@@ -168,11 +173,10 @@ Screenshot = f12
 
 ## Credits
 
-- Thanks to awesome [Textual Project](https://github.com/Textualize/textual)
-- [Kindle Unpack](https://github.com/kevinhendricks/KindleUnpack)
-- And many others!
+- [ncurses](https://invisible-island.net/ncurses/)
+- [libmobi](https://github.com/bfabiszewski/libmobi)
+- [libxml2](https://gitlab.gnome.org/GNOME/libxml2)
 
 ## License
 
 GPL-3
-

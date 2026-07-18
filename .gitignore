@@ -1,8 +1,5 @@
 dist
 tmp/
 .tmp/
-.venv/
 build/
-__pycache__/
-*.pyc
 .envrc
