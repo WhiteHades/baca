@@ -28,6 +28,7 @@ enum {
   BACA_JUMP_HISTORY_LIMIT = 100,
   BACA_HELP_LINE_COUNT = 19,
   BACA_PDF_HELP_LINE_COUNT = 20,
+  BACA_KEY_CTRL_I = KEY_MAX + 1,
 };
 
 static const char BACA_IMAGE_PLACEHOLDER[] = "IMAGE";
@@ -667,6 +668,11 @@ static BacaNormalizedKey read_normalized_key(const BacaConfig *config,
   return key;
 }
 
+static void define_extended_keys(void) {
+  /* Ghostty uses Kitty's CSI-u encoding to distinguish Ctrl-i from Tab. */
+  (void)define_key("\033[105;5u", BACA_KEY_CTRL_I);
+}
+
 static size_t maximum_scroll(const BacaTuiState *state) {
   const size_t visible = state->rows > 0 ? (size_t)state->rows : 1U;
   return state->app->layout.line_count > visible
@@ -1231,6 +1237,7 @@ static bool open_external(BacaTuiState *state, const char *target,
     opened = false;
   }
   (void)keypad(stdscr, true);
+  define_extended_keys();
   (void)clearok(stdscr, true);
   update_dimensions(state);
 
@@ -2908,11 +2915,15 @@ static void handle_reader_key(BacaTuiState *state,
   if (state->reader_command.g_pending) {
     reset_reader_command(state);
   }
-  if (!key->key_code && key->character == L'\t' &&
-      state->jumps.forward_count > 0U) {
+  const bool plain_tab = !key->key_code && key->character == L'\t';
+  const bool ctrl_i = key->key_code && key->code == BACA_KEY_CTRL_I;
+  if ((plain_tab || ctrl_i) && state->jumps.forward_count > 0U) {
     state->reader_command.count = 0U;
     state->reader_command.count_active = false;
     (void)traverse_jump_history(state, true);
+    return;
+  }
+  if (ctrl_i) {
     return;
   }
   bool explicit_count = false;
@@ -3007,6 +3018,7 @@ static bool initialize_curses(BacaTuiState *state, BacaError *error) {
   (void)raw();
   (void)noecho();
   (void)keypad(stdscr, true);
+  define_extended_keys();
   (void)set_escdelay(25);
   state->previous_cursor = curs_set(0);
   state->colors = false;
@@ -3462,6 +3474,7 @@ static bool library_initialize_curses(BacaLibraryTuiState *state,
   (void)cbreak();
   (void)noecho();
   (void)keypad(stdscr, true);
+  define_extended_keys();
   (void)set_escdelay(25);
   state->previous_cursor = curs_set(0);
   state->colors = false;

@@ -158,7 +158,9 @@ static bool run_vim_navigation_pty(BacaString *output, unsigned *stage) {
         *stage = 4U;
     }
     start = output->length;
-    ok = ok && text_pty_write(master, "\t", 1U) && text_pty_wait_for(master, output, start, "dddddddd");
+    static const char ctrl_i[] = "\033[105;5u";
+    ok = ok && text_pty_write(master, ctrl_i, sizeof(ctrl_i) - 1U) &&
+         text_pty_wait_for(master, output, start, "dddddddd");
     if (ok) {
         *stage = 5U;
     }
