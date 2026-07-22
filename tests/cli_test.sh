@@ -70,9 +70,9 @@ pass history
 if ! command -v timeout >/dev/null 2>&1; then
     printf 'SKIP cli.library_default: timeout unavailable\n'
 else
-    library_output=$(printf q | TERM=xterm-256color timeout 10s "$binary" 2>&1) || fail library_default
+    library_output=$(printf '\033q' | TERM=xterm-256color timeout 10s "$binary" 2>&1) || fail library_default
     case $library_output in
-        *"baca"*"No books yet"*) ;;
+        *"baca"*"Paste the path to your book directory"*) ;;
         *) fail library_default ;;
     esac
     pass library_default

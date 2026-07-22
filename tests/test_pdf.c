@@ -878,11 +878,10 @@ static bool run_pdf_pty(PdfPtyResult *result) {
     result->fixed_rendered = pdf_wait_for(master, &result->output, 0U, "a=t,f=100");
     size_t start = result->output.length;
     ok = result->fixed_rendered && pdf_write_all(master, "z", 1U) &&
-         pdf_wait_for(master, &result->output, start, "Keymaps");
+          pdf_wait_for(master, &result->output, start, "Help");
     result->help_opened = ok;
     start = result->output.length;
-    ok = ok && pdf_write_all(master, "G", 1U) &&
-          pdf_wait_for(master, &result->output, start, "Toggle PDF view") &&
+    ok = ok && pdf_write_all(master, "jjj", 3U) &&
           pdf_wait_for(master, &result->output, start, "ctrl+x");
     result->help_shows_configured_toggle =
         ok && strstr(result->output.data + start, "ctrl+x") != NULL;
@@ -1251,8 +1250,8 @@ static bool run_pdf_current_page_search_pty(BacaString *output, unsigned *stage)
     char *path = create_tall_destination_pdf_fixture("pdf/search-pty/reader.pdf");
     if (path == NULL ||
         !baca_test_write_text("pdf/search-pty/config/baca/config.ini",
-                              "[General]\nImageMode=kitty\nMaxTextWidth=80\nPageScrollDuration=0\n"
-                              "[Keymaps]\nTogglePdfView=ctrl+x\n") ||
+                               "[General]\nImageMode=kitty\nMaxTextWidth=80\nPageScrollDuration=0\n"
+                               "[Keymaps]\nTogglePdfView=ctrl+x\nSearchBackward=u\n") ||
         !baca_test_mkdir("pdf/search-pty/cache")) {
         free(path);
         return false;
@@ -1330,7 +1329,7 @@ static bool run_pdf_current_page_search_pty(BacaString *output, unsigned *stage)
         *stage = 3U;
     }
     start = output->length;
-    static const char backward[] = "?CURRENT_MATCH\n\030";
+    static const char backward[] = "uCURRENT_MATCH\n\030";
     ok = ok && pdf_write_all(master, backward, sizeof(backward) - 1U) &&
          pdf_wait_for(master, output, start, "search filler line 10") &&
          pdf_write_all(master, "qq", 2U);

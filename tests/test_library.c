@@ -16,6 +16,16 @@
 #include <unistd.h>
 #include <zip.h>
 
+static const unsigned char library_pixel_png[] = {
+    0x89U, 0x50U, 0x4eU, 0x47U, 0x0dU, 0x0aU, 0x1aU, 0x0aU, 0x00U, 0x00U,
+    0x00U, 0x0dU, 0x49U, 0x48U, 0x44U, 0x52U, 0x00U, 0x00U, 0x00U, 0x01U,
+    0x00U, 0x00U, 0x00U, 0x01U, 0x08U, 0x04U, 0x00U, 0x00U, 0x00U, 0xb5U,
+    0x1cU, 0x0cU, 0x02U, 0x00U, 0x00U, 0x00U, 0x0bU, 0x49U, 0x44U, 0x41U,
+    0x54U, 0x78U, 0xdaU, 0x63U, 0x64U, 0xf8U, 0x0fU, 0x00U, 0x01U, 0x05U,
+    0x01U, 0x01U, 0x27U, 0x18U, 0xe3U, 0x66U, 0x00U, 0x00U, 0x00U, 0x00U,
+    0x49U, 0x45U, 0x4eU, 0x44U, 0xaeU, 0x42U, 0x60U, 0x82U,
+};
+
 [[nodiscard]] int baca_platform_block_exit_signals(sigset_t *previous);
 
 typedef struct LibraryPtyEnvironment {
@@ -219,6 +229,23 @@ static bool library_configure_root(const LibraryPtyEnvironment *environment, con
     }
     baca_string_free(&text);
     free(directory);
+    free(path);
+    return written;
+}
+
+static bool library_configure_root_with_mode(const LibraryPtyEnvironment *environment, const char *root,
+                                             const char *image_mode) {
+    if (!library_configure_root(environment, root)) {
+        return false;
+    }
+    BacaError error = {0};
+    char *path = baca_path_join(environment->config, "baca/config.ini", &error);
+    FILE *file = path == NULL ? NULL : fopen(path, "ab");
+    bool written = false;
+    if (file != NULL) {
+        written = fprintf(file, "ImageMode = %s\n", image_mode) > 0;
+        written = fclose(file) == 0 && written;
+    }
     free(path);
     return written;
 }
@@ -956,12 +983,40 @@ static BacaTestResult test_deleted_middle_selection_preservation(void) {
 static bool run_pty_empty_library(void) {
     LibraryPtyEnvironment environment = {0};
     LibraryPtyProcess process = {.master = -1};
-    bool success = library_pty_environment_init("empty", &environment) &&
-                   library_pty_spawn(&environment, "xterm-256color", 12U, 60U, NULL, &process) &&
-                   library_pty_wait_for(&process, "No books yet") && library_pty_send_text(&process, "jq") &&
-                   library_pty_wait_exit(&process) && WIFEXITED(process.status) && WEXITSTATUS(process.status) == 0;
+    char *book = library_create_epub("library-pty/setup/root/book.epub", "Setup Book", "Reader",
+                                     "SETUP BOOK BODY");
+    char *root = baca_test_path("library-pty/setup/root");
+    BacaString input = {0};
+    BacaError error = {0};
+    bool success = book != NULL && root != NULL && baca_string_append(&input, root, &error) &&
+                   baca_string_append_char(&input, '\n', &error) &&
+                   library_pty_environment_init("empty", &environment) &&
+                    library_pty_spawn(&environment, "xterm-256color", 12U, 60U, NULL, &process) &&
+                    library_pty_wait_for(&process, "Paste the path to your book directory") &&
+                    library_pty_send_text(&process, "/definitely/missing/library\n") &&
+                    library_pty_wait_for(&process, "cannot use library") &&
+                    library_pty_send_text(&process, input.data) && library_pty_wait_for(&process, "library added") &&
+                    library_pty_settle(&process) &&
+                    library_pty_screen_line_matches(&process, 12U, 60U, "book", NULL) &&
+                    library_pty_send_text(&process, "q") &&
+                    library_pty_wait_exit(&process) && WIFEXITED(process.status) && WEXITSTATUS(process.status) == 0;
+    if (success) {
+        char *config = baca_path_join(environment.config, "baca/config.ini", &error);
+        BacaBuffer contents = {0};
+        success = config != NULL && baca_read_file(config, &contents, &error) &&
+                  strstr((const char *)contents.data, root) != NULL;
+        baca_buffer_free(&contents);
+        free(config);
+    }
+    if (!success) {
+        fprintf(stderr, "setup PTY capture: %s\n",
+                process.output.data == NULL ? "(empty)" : process.output.data);
+    }
+    baca_string_free(&input);
     library_pty_process_free(&process);
     library_pty_environment_free(&environment);
+    free(book);
+    free(root);
     return success;
 }
 
@@ -1003,10 +1058,11 @@ static bool run_pty_typed_path(void) {
     BacaString input = {0};
     BacaError error = {0};
     bool success = book != NULL && library_pty_environment_init("typed", &environment) &&
-                   baca_string_append_char(&input, 'o', &error) && baca_string_append(&input, book, &error) &&
-                   baca_string_append_char(&input, '\n', &error) &&
-                   library_pty_spawn(&environment, "xterm-256color", 12U, 60U, NULL, &process) &&
-                   library_pty_wait_for(&process, "No books yet") &&
+                    baca_string_append_char(&input, 27, &error) && baca_string_append_char(&input, 'o', &error) &&
+                    baca_string_append(&input, book, &error) &&
+                    baca_string_append_char(&input, '\n', &error) &&
+                    library_pty_spawn(&environment, "xterm-256color", 12U, 60U, NULL, &process) &&
+                    library_pty_wait_for(&process, "Paste the path to your book directory") &&
                    library_pty_send_text(&process, input.data) && library_pty_wait_for(&process, "TYPED PATH BODY");
     if (success) {
         library_pty_clear_output(&process);
@@ -1299,6 +1355,7 @@ static bool run_pty_height_one_filter_prompt(void) {
     LibraryPtyEnvironment environment = {0};
     LibraryPtyProcess process = {.master = -1};
     bool success = library_pty_environment_init("height-one-prompt", &environment) &&
+                   library_configure_root(&environment, environment.temporary) &&
                    library_pty_spawn(&environment, "xterm-256color", 1U, 40U, NULL, &process) &&
                    library_pty_wait_for(&process, "?1049h") && library_pty_settle(&process);
     if (success) {
@@ -1330,6 +1387,7 @@ static bool run_pty_narrow_path_prompt(void) {
     LibraryPtyEnvironment environment = {0};
     LibraryPtyProcess process = {.master = -1};
     bool success = library_pty_environment_init("narrow-prompt", &environment) &&
+                   library_configure_root(&environment, environment.temporary) &&
                    library_pty_spawn(&environment, "xterm-256color", 2U, 5U, NULL, &process) &&
                    library_pty_wait_for(&process, "?1049h") && library_pty_settle(&process);
     if (success) {
@@ -1422,8 +1480,9 @@ static bool run_pty_signal_restore(void) {
     LibraryPtyEnvironment environment = {0};
     LibraryPtyProcess process = {.master = -1};
     bool success = library_pty_environment_init("signal", &environment) &&
-                   library_pty_spawn(&environment, "xterm-256color", 12U, 60U, NULL, &process) &&
-                   library_pty_wait_for(&process, "No books yet") && kill(process.pid, SIGTERM) == 0 &&
+                    library_pty_spawn(&environment, "xterm-256color", 12U, 60U, NULL, &process) &&
+                    library_pty_wait_for(&process, "Paste the path to your book directory") &&
+                    kill(process.pid, SIGTERM) == 0 &&
                    library_pty_wait_exit(&process) && WIFEXITED(process.status) &&
                    WEXITSTATUS(process.status) == 128 + SIGTERM && process.output.data != NULL &&
                    strstr(process.output.data, "?1049l") != NULL;
@@ -1475,10 +1534,42 @@ static bool run_pty_calibre_navigation(void) {
                                          "second");
     char *root = baca_test_path("library-pty/calibre/root");
     bool success = fixtures && root != NULL && library_pty_environment_init("calibre", &environment) &&
-                   library_configure_root(&environment, root) &&
-                   library_pty_spawn(&environment, "xterm-256color", 14U, 80U, NULL, &process) &&
-                   library_pty_wait_for(&process, "baca / authors") &&
-                   library_pty_wait_for(&process, "Alice Writer");
+                    library_configure_root(&environment, root) &&
+                    library_pty_spawn(&environment, "xterm-256color", 14U, 80U, NULL, &process) &&
+                    library_pty_wait_for(&process, "baca / all books") &&
+                    library_pty_wait_for(&process, "First Book [EPUB +1]") &&
+                    library_pty_settle(&process) &&
+                    library_pty_screen_line_matches(&process, 14U, 80U, "? help", NULL);
+    if (success) {
+        library_pty_clear_output(&process);
+        success = library_pty_send_text(&process, "?") && library_pty_wait_for(&process, "navigation") &&
+                  library_pty_send_text(&process, "jjjjjjjjjjjjjjjj") &&
+                  library_pty_wait_for(&process, "space space") && library_pty_send_text(&process, "?") &&
+                  library_pty_settle(&process) &&
+                  library_pty_screen_line_matches(&process, 14U, 80U, "baca / all books", NULL);
+    }
+    if (success) {
+        library_pty_clear_output(&process);
+        success = library_pty_send_text(&process, "v") &&
+                  library_pty_wait_for(&process, " / card") && library_pty_settle(&process) &&
+                  library_pty_screen_line_matches(&process, 14U, 80U, "baca / all books / card", NULL) &&
+                  library_pty_wait_for(&process, "formats  EPUB  PDF") &&
+                  library_pty_send_text(&process, "v  First") &&
+                  library_pty_wait_for(&process, "find a book") && library_pty_settle(&process) &&
+                  library_pty_screen_line_matches(&process, 14U, 80U, "First Book", NULL) &&
+                  library_pty_screen_line_matches(&process, 14U, 80U, "Alice Writer", NULL);
+    }
+    if (success) {
+        library_pty_clear_output(&process);
+        success = library_pty_send_text(&process, "\n") &&
+                  library_pty_wait_for(&process, "CALIBRE EPUB BODY") &&
+                  library_pty_send_text(&process, "q") &&
+                  library_pty_wait_for(&process, "baca / all books") &&
+                  library_pty_send_text(&process, "a") &&
+                  library_pty_wait_for(&process, "uthors") && library_pty_settle(&process) &&
+                  library_pty_screen_line_matches(&process, 14U, 80U, "baca / authors", NULL) &&
+                  library_pty_wait_for(&process, "Alice Writer");
+    }
     if (success) {
         success = library_pty_send_text(&process, "\n") &&
                   library_pty_wait_for(&process, "First Book [EPUB +1]") && library_pty_settle(&process) &&
@@ -1500,8 +1591,8 @@ static bool run_pty_calibre_navigation(void) {
     }
     if (success) {
         success = library_pty_send_text(&process, "q") && library_pty_settle(&process) &&
-                  library_pty_screen_line_matches(&process, 14U, 80U, "baca / authors", NULL) &&
-                  library_pty_send_text(&process, "aq") && library_pty_wait_exit(&process) &&
+                  library_pty_screen_line_matches(&process, 14U, 80U, "baca / all books", NULL) &&
+                  library_pty_send_text(&process, "q") && library_pty_wait_exit(&process) &&
                   WIFEXITED(process.status) && WEXITSTATUS(process.status) == 0;
     }
     if (!success) {
@@ -1517,6 +1608,86 @@ static bool run_pty_calibre_navigation(void) {
 
 static BacaTestResult test_pty_calibre_navigation(void) {
     TEST_ASSERT(run_pty_calibre_navigation());
+    return BACA_TEST_PASS;
+}
+
+static bool run_pty_cover_preview(void) {
+    LibraryPtyEnvironment environment = {0};
+    LibraryPtyProcess process = {.master = -1};
+    char *epub = library_create_epub("library-pty/cover/root/Writer/Cover Book (1)/book.epub",
+                                     "Cover Book", "Writer", "COVER BODY");
+    bool fixtures = epub != NULL && baca_test_write_text("library-pty/cover/root/metadata.db", "") &&
+                    baca_test_write("library-pty/cover/root/Writer/Cover Book (1)/cover.png",
+                                    library_pixel_png, sizeof(library_pixel_png));
+    char *root = baca_test_path("library-pty/cover/root");
+    bool success = fixtures && root != NULL && library_pty_environment_init("cover", &environment) &&
+                   library_configure_root_with_mode(&environment, root, "kitty") &&
+                   library_pty_spawn(&environment, "xterm-256color", 14U, 80U, NULL, &process) &&
+                   library_pty_wait_for(&process, "Cover Book") && library_pty_send_text(&process, "v") &&
+                   library_pty_wait_for(&process, "a=t,f=100") && library_pty_send_text(&process, "q") &&
+                   library_pty_wait_exit(&process) && WIFEXITED(process.status) &&
+                   WEXITSTATUS(process.status) == 0;
+    if (!success) {
+        fprintf(stderr, "cover PTY capture: %s\n",
+                process.output.data == NULL ? "(empty)" : process.output.data);
+    }
+    library_pty_process_free(&process);
+    library_pty_environment_free(&environment);
+    free(root);
+    free(epub);
+    return success;
+}
+
+static BacaTestResult test_pty_cover_preview(void) {
+    TEST_ASSERT(run_pty_cover_preview());
+    return BACA_TEST_PASS;
+}
+
+static bool run_pty_picker_scroll(void) {
+    LibraryPtyEnvironment environment = {0};
+    LibraryPtyProcess process = {.master = -1};
+    const char *titles[] = {"First Pick", "Second Pick", "Third Pick", "Fourth Pick"};
+    char *paths[BACA_ARRAY_LEN(titles)] = {0};
+    BacaHistoryEntry entries[BACA_ARRAY_LEN(titles)] = {0};
+    bool fixtures = true;
+    for (size_t index = 0U; fixtures && index < BACA_ARRAY_LEN(titles); ++index) {
+        char relative[128] = {0};
+        (void)snprintf(relative, sizeof(relative), "library-pty/picker-scroll/%zu.epub", index);
+        fixtures = baca_test_write_text(relative, "pick");
+        paths[index] = fixtures ? baca_test_path(relative) : NULL;
+        fixtures = fixtures && paths[index] != NULL;
+        entries[index] = library_entry(paths[index], titles[index], "Reader", (double)index / 10.0,
+                                       "2026-07-19 12:00:00");
+    }
+    static const char down_twice[] = "\033OB\033OB";
+    bool success = fixtures && library_pty_environment_init("picker-scroll", &environment) &&
+                   library_seed_history(&environment, entries, BACA_ARRAY_LEN(entries)) &&
+                   library_pty_spawn(&environment, "xterm-256color", 10U, 60U, NULL, &process) &&
+                   library_pty_wait_for(&process, "First Pick") && library_pty_send_text(&process, "  ") &&
+                   library_pty_wait_for(&process, "find a book") &&
+                   library_pty_send(&process, down_twice, sizeof(down_twice) - 1U) &&
+                   library_pty_settle(&process) &&
+                   library_pty_screen_line_matches(&process, 10U, 60U, "Third Pick", NULL) &&
+                   !library_pty_screen_line_matches(&process, 10U, 60U, "First Pick", NULL);
+    if (success) {
+        static const char close[] = {27, 'q'};
+        success = library_pty_send(&process, close, sizeof(close)) && library_pty_wait_exit(&process) &&
+                  WIFEXITED(process.status) && WEXITSTATUS(process.status) == 0;
+    }
+    if (!success) {
+        fprintf(stderr, "picker scroll PTY capture: %s\n",
+                process.output.data == NULL ? "(empty)" : process.output.data);
+    }
+    library_pty_process_free(&process);
+    library_pty_environment_free(&environment);
+    for (size_t index = 0U; index < BACA_ARRAY_LEN(paths); ++index) {
+        free(paths[index]);
+    }
+    return success;
+}
+
+static BacaTestResult test_pty_picker_scroll(void) {
+    TEST_ASSERT(run_pty_picker_scroll());
     return BACA_TEST_PASS;
 }
 
@@ -1547,6 +1718,8 @@ const BacaTestCase *baca_library_test_cases(size_t *count) {
         {.name = "pty_signal_restore", .function = test_pty_signal_restore},
         {.name = "pty_direct_path_bypass", .function = test_pty_direct_path_bypass},
         {.name = "pty_calibre_navigation", .function = test_pty_calibre_navigation},
+        {.name = "pty_cover_preview", .function = test_pty_cover_preview},
+        {.name = "pty_picker_scroll", .function = test_pty_picker_scroll},
     };
     *count = BACA_ARRAY_LEN(cases);
     return cases;

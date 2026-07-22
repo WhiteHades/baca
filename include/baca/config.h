@@ -68,6 +68,7 @@ typedef struct BacaConfig {
 
 [[nodiscard]] bool baca_config_load(BacaConfig *config, BacaError *error);
 [[nodiscard]] bool baca_config_load_path(BacaConfig *config, const char *path, BacaError *error);
+[[nodiscard]] bool baca_config_save_library_path(const char *library_path, BacaError *error);
 void baca_config_free(BacaConfig *config);
 [[nodiscard]] int baca_config_content_width(const BacaConfig *config, int terminal_width);
 [[nodiscard]] const char *baca_config_default_text(void);

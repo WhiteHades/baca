@@ -50,7 +50,7 @@ static const char BACA_DEFAULT_CONFIG[] =
     "\n"
     "# colors accept #rgb, #rrggbb, or common names\n"
     "[Color Dark]\n"
-    "Background = #1e1e2e\n"
+    "Background = #1d1c2b\n"
     "Foreground = #cdd6f4\n"
     "Accent = #cba6f7\n"
     "\n"
@@ -72,9 +72,9 @@ static const char BACA_DEFAULT_CONFIG[] =
     "AddBookmark = b\n"
     "OpenBookmarks = B\n"
     "OpenMetadata = M\n"
-    "OpenHelp = f1\n"
+    "OpenHelp = question_mark,f1\n"
     "SearchForward = slash\n"
-    "SearchBackward = question_mark\n"
+    "SearchBackward = f2\n"
     "NextMatch = n\n"
     "PreviousMatch = N\n"
     "Confirm = enter\n"
@@ -532,12 +532,12 @@ static bool baca_config_build(const BacaIni *ini, BacaConfig *config, BacaError 
     BacaConfig result = {
         .max_text_width = 80,
         .justification = BACA_JUSTIFY_LEFT,
-        .dark = {.background = 0x1e1e2eU, .foreground = 0xcdd6f4U, .accent = 0xcba6f7U},
+        .dark = {.background = 0x1d1c2bU, .foreground = 0xcdd6f4U, .accent = 0xcba6f7U},
         .light = {.background = 0xeff1f5U, .foreground = 0x4c4f69U, .accent = 0x8839efU},
     };
     (void)baca_config_parse_positive_width(baca_ini_get(ini, "General", "MaxTextWidth", "80"),
                                            &result.max_text_width, &result.max_text_width_percent);
-    (void)baca_config_parse_color(baca_ini_get(ini, "Color Dark", "Background", "#1e1e2e"),
+    (void)baca_config_parse_color(baca_ini_get(ini, "Color Dark", "Background", "#1d1c2b"),
                                   &result.dark.background);
     (void)baca_config_parse_color(baca_ini_get(ini, "Color Dark", "Foreground", "#cdd6f4"),
                                   &result.dark.foreground);
@@ -601,11 +601,11 @@ static bool baca_config_build(const BacaIni *ini, BacaConfig *config, BacaError 
                                     &result.keymaps.open_bookmarks, error) ||
         !baca_config_parse_key_list(baca_ini_get(ini, "Keymaps", "OpenMetadata", "M"),
                                     &result.keymaps.open_metadata, error) ||
-        !baca_config_parse_key_list(baca_ini_get(ini, "Keymaps", "OpenHelp", "f1"),
+        !baca_config_parse_key_list(baca_ini_get(ini, "Keymaps", "OpenHelp", "question_mark,f1"),
                                     &result.keymaps.open_help, error) ||
         !baca_config_parse_key_list(baca_ini_get(ini, "Keymaps", "SearchForward", "slash"),
                                     &result.keymaps.search_forward, error) ||
-        !baca_config_parse_key_list(baca_ini_get(ini, "Keymaps", "SearchBackward", "question_mark"),
+        !baca_config_parse_key_list(baca_ini_get(ini, "Keymaps", "SearchBackward", "f2"),
                                     &result.keymaps.search_backward, error) ||
         !baca_config_parse_key_list(baca_ini_get(ini, "Keymaps", "NextMatch", "n"),
                                     &result.keymaps.next_match, error) ||
@@ -764,6 +764,164 @@ bool baca_config_load(BacaConfig *config, BacaError *error) {
     bool loaded = baca_config_load_path(config, path, error);
     free(path);
     return loaded;
+}
+
+static bool baca_config_token_equals(const char *start, const char *end, const char *expected) {
+    while (start < end && isspace((unsigned char)*start) != 0) {
+        ++start;
+    }
+    while (end > start && isspace((unsigned char)end[-1]) != 0) {
+        --end;
+    }
+    const size_t length = (size_t)(end - start);
+    if (length != strlen(expected)) {
+        return false;
+    }
+    for (size_t index = 0U; index < length; ++index) {
+        if (tolower((unsigned char)start[index]) != tolower((unsigned char)expected[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool baca_config_write_atomic(const char *path, const char *data, size_t length, BacaError *error) {
+    BacaString temporary = {0};
+    if (!baca_string_append(&temporary, path, error) ||
+        !baca_string_append(&temporary, ".tmp.XXXXXX", error)) {
+        baca_string_free(&temporary);
+        return false;
+    }
+    int descriptor = mkstemp(temporary.data);
+    if (descriptor < 0) {
+        const int saved_errno = errno;
+        baca_error_set(error, BACA_ERROR_IO, "could not create temporary config: %s", strerror(saved_errno));
+        baca_string_free(&temporary);
+        return false;
+    }
+    bool written = fchmod(descriptor, 0600) == 0;
+    const unsigned char *cursor = (const unsigned char *)data;
+    size_t remaining = length;
+    while (written && remaining > 0U) {
+        const ssize_t count = write(descriptor, cursor, remaining);
+        if (count > 0) {
+            cursor += (size_t)count;
+            remaining -= (size_t)count;
+        } else if (count < 0 && errno == EINTR) {
+            continue;
+        } else {
+            written = false;
+        }
+    }
+    if (written) {
+        written = fsync(descriptor) == 0;
+    }
+    const int close_status = close(descriptor);
+    written = written && close_status == 0;
+    if (written) {
+        written = rename(temporary.data, path) == 0;
+    }
+    if (!written) {
+        const int saved_errno = errno == 0 ? EIO : errno;
+        (void)unlink(temporary.data);
+        baca_error_set(error, BACA_ERROR_IO, "could not save config '%s': %s", path, strerror(saved_errno));
+    }
+    baca_string_free(&temporary);
+    return written;
+}
+
+static bool baca_config_append_value(BacaString *output, const char *value, BacaError *error) {
+    for (const char *cursor = value; *cursor != '\0'; ++cursor) {
+        if (!baca_string_append_char(output, *cursor, error) ||
+            (*cursor == '%' && !baca_string_append_char(output, '%', error))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool baca_config_save_library_path(const char *library_path, BacaError *error) {
+    if (library_path == nullptr || library_path[0] == '\0' || strchr(library_path, '\n') != nullptr ||
+        strchr(library_path, '\r') != nullptr || isspace((unsigned char)library_path[0]) != 0 ||
+        isspace((unsigned char)library_path[strlen(library_path) - 1U]) != 0) {
+        baca_error_set(error, BACA_ERROR_ARGUMENT, "invalid library path");
+        return false;
+    }
+    char *path = baca_xdg_config_path("config.ini", error);
+    if (path == nullptr) {
+        return false;
+    }
+    BacaBuffer contents = {0};
+    if (!baca_read_file(path, &contents, error)) {
+        free(path);
+        return false;
+    }
+
+    BacaString output = {0};
+    const char *cursor = (const char *)contents.data;
+    const char *end = cursor + contents.length;
+    bool in_general = false;
+    bool replaced = false;
+    bool built = true;
+    while (built && cursor < end) {
+        const char *line_end = memchr(cursor, '\n', (size_t)(end - cursor));
+        const char *next = line_end == nullptr ? end : line_end + 1;
+        const char *content_end = line_end == nullptr ? end : line_end;
+        if (content_end > cursor && content_end[-1] == '\r') {
+            --content_end;
+        }
+        const char *trimmed = cursor;
+        while (trimmed < content_end && isspace((unsigned char)*trimmed) != 0) {
+            ++trimmed;
+        }
+        bool section_line = false;
+        bool general_line = false;
+        if (trimmed < content_end && *trimmed == '[') {
+            const char *closing = memchr(trimmed + 1, ']', (size_t)(content_end - trimmed - 1));
+            section_line = closing != nullptr;
+            general_line = section_line && baca_config_token_equals(trimmed + 1, closing, "General");
+            if (section_line) {
+                in_general = general_line;
+            }
+        }
+
+        bool library_line = false;
+        if (in_general && !section_line && trimmed < content_end && *trimmed != '#' && *trimmed != ';') {
+            const char *delimiter = memchr(trimmed, '=', (size_t)(content_end - trimmed));
+            const char *colon = memchr(trimmed, ':', (size_t)(content_end - trimmed));
+            if (delimiter == nullptr || (colon != nullptr && colon < delimiter)) {
+                delimiter = colon;
+            }
+            library_line = delimiter != nullptr && baca_config_token_equals(trimmed, delimiter, "LibraryPath");
+        }
+        if (built && library_line && !replaced) {
+            built = baca_string_append(&output, "LibraryPath = ", error) &&
+                    baca_config_append_value(&output, library_path, error) &&
+                    baca_string_append_char(&output, '\n', error);
+            replaced = built;
+        } else if (built) {
+            built = baca_string_append_n(&output, cursor, (size_t)(next - cursor), error);
+        }
+        cursor = next;
+    }
+    if (built && !replaced) {
+        if (output.length > 0U && output.data[output.length - 1U] != '\n') {
+            built = baca_string_append_char(&output, '\n', error);
+        }
+        built = built && baca_string_append(&output, "[General]\n", error);
+        if (built) {
+            built = baca_string_append(&output, "LibraryPath = ", error) &&
+                    baca_config_append_value(&output, library_path, error) &&
+                    baca_string_append_char(&output, '\n', error);
+        }
+    }
+    if (built) {
+        built = baca_config_write_atomic(path, output.data, output.length, error);
+    }
+    baca_string_free(&output);
+    baca_buffer_free(&contents);
+    free(path);
+    return built;
 }
 
 void baca_config_free(BacaConfig *config) {

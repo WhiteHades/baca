@@ -558,6 +558,7 @@ static int run_library(void) {
     BacaLibraryAction action = {0};
     result = baca_library_tui_run(&config, &history,
                                   baca_catalog_is_open(&catalog) ? &catalog : NULL,
+                                  library_root == NULL && history.length == 0U,
                                   sort,
                                   tui_selected_filepath, context, &action,
                                   &error);
@@ -607,6 +608,33 @@ static int run_library(void) {
       preserve_index = !baca_catalog_is_open(&catalog);
       remove_missing = !baca_catalog_is_open(&catalog);
       (void)snprintf(context, sizeof(context), "library refreshed");
+      continue;
+    }
+    if (action.command == BACA_LIBRARY_COMMAND_SET_ROOT) {
+      BacaError path_error = {0};
+      char *resolved_root = baca_realpath(action.path, &path_error);
+      if (resolved_root == NULL || !library_directory(resolved_root)) {
+        (void)snprintf(context, sizeof(context), "cannot use library: %.488s",
+                       resolved_root == NULL ? path_error.message
+                                             : "path is not a directory");
+        free(resolved_root);
+        free(action.path);
+        continue;
+      }
+      if (!baca_config_save_library_path(resolved_root, &path_error)) {
+        (void)snprintf(context, sizeof(context), "library not saved: %.491s",
+                       path_error.message);
+        free(resolved_root);
+        free(action.path);
+        continue;
+      }
+      free(library_root);
+      library_root = resolved_root;
+      free(selected_filepath);
+      selected_filepath = NULL;
+      preserve_index = false;
+      free(action.path);
+      (void)snprintf(context, sizeof(context), "library added");
       continue;
     }
     if (action.command != BACA_LIBRARY_COMMAND_OPEN || action.path == NULL) {

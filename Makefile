@@ -38,13 +38,16 @@ SOURCES = \
 	src/layout.c \
 	src/library.c \
 	src/library_shelf.c \
+	src/library_tui.c \
 	src/mobi.c \
 	src/pdf.c \
 	src/platform.c \
 	src/remote.c \
 	src/search.c \
+	src/terminal_runtime.c \
 	src/text.c \
-	src/tui.c \
+	src/text_input.c \
+	src/reader_tui.c \
 	src/main.c
 OBJECTS = $(SOURCES:src/%.c=build/%.o)
 TEST_SOURCES = tests/test_main.c tests/test_catalog.c tests/test_common.c tests/test_comic.c tests/test_config.c tests/test_database.c \

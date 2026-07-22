@@ -1,25 +1,21 @@
 #include "baca/app.h"
 #include "baca/document_backend.h"
 #include "baca/graphics.h"
-#include "baca/library_shelf.h"
-#include "baca/library_tui.h"
 #include "baca/platform.h"
+#include "terminal_runtime.h"
+#include "text_input.h"
 
 #include <ctype.h>
 #include <curses.h>
-#include <errno.h>
 #include <limits.h>
 #include <math.h>
 #include <pthread.h>
-#include <signal.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
 #include <time.h>
-#include <wchar.h>
-#include <wctype.h>
 #include <unistd.h>
+#include <wchar.h>
 
 enum {
   BACA_PAIR_BASE = 1,
@@ -28,14 +24,12 @@ enum {
   BACA_PAIR_ALERT,
   BACA_PAIR_IMAGE_FIRST,
   BACA_JUMP_HISTORY_LIMIT = 100,
-  BACA_HELP_LINE_COUNT = 21,
-  BACA_PDF_HELP_LINE_COUNT = 22,
+  BACA_HELP_LINE_COUNT = 26,
+  BACA_PDF_HELP_LINE_COUNT = 28,
   BACA_KEY_CTRL_I = KEY_MAX + 1,
 };
 
 static const char BACA_IMAGE_PLACEHOLDER[] = "IMAGE";
-static const int BACA_EXIT_SIGNALS[] = {SIGINT, SIGTERM, SIGHUP};
-static volatile sig_atomic_t baca_exit_signal = 0;
 
 typedef enum BacaOverlayKind {
   BACA_OVERLAY_NONE = 0,
@@ -65,9 +59,7 @@ typedef struct BacaSearchState {
 } BacaSearchState;
 
 typedef struct BacaPromptState {
-  char value[512];
-  size_t length;
-  size_t cursor;
+  BacaTextInput text;
   double saved_progress;
   bool active;
   bool forward;
@@ -123,11 +115,6 @@ typedef struct BacaPdfRenderFailure {
   bool valid;
 } BacaPdfRenderFailure;
 
-typedef struct BacaSignalHandlers {
-  struct sigaction previous[BACA_ARRAY_LEN(BACA_EXIT_SIGNALS)];
-  size_t installed;
-} BacaSignalHandlers;
-
 typedef struct BacaTuiState {
   BacaApp *app;
   BacaGraphicsContext *graphics;
@@ -163,136 +150,10 @@ typedef struct BacaTuiState {
   bool dirty;
 } BacaTuiState;
 
-typedef enum BacaLibraryInputKind {
-  BACA_LIBRARY_INPUT_NONE = 0,
-  BACA_LIBRARY_INPUT_FILTER,
-  BACA_LIBRARY_INPUT_PATH,
-} BacaLibraryInputKind;
-
-typedef struct BacaLibraryTuiState {
-  const BacaConfig *config;
-  const BacaHistory *history;
-  BacaCatalog *catalog;
-  BacaLibraryShelf shelf;
-  BacaLibraryShelfKind mode;
-  char *author;
-  size_t format_book;
-  BacaLibraryView view;
-  BacaLibraryAction action;
-  BacaPromptState input;
-  BacaLibraryInputKind input_kind;
-  BacaLibrarySort sort;
-  size_t selected;
-  size_t top;
-  int rows;
-  int columns;
-  int previous_cursor;
-  char filter[sizeof(((BacaPromptState *)0)->value)];
-  char filter_before[sizeof(((BacaPromptState *)0)->value)];
-  char *status;
-  char *input_selection;
-  bool colors;
-  bool g_pending;
-  bool quit;
-  bool dirty;
-} BacaLibraryTuiState;
-
 static void open_alert(BacaTuiState *state, const char *message);
 static void draw_frame(BacaTuiState *state);
 static bool follow_link(BacaTuiState *state, const char *link,
                         const char *missing_target_message);
-
-static void request_exit(int signal_number) {
-  if (baca_exit_signal == 0) {
-    baca_exit_signal = signal_number;
-  }
-}
-
-static bool block_exit_signals(sigset_t *previous, BacaError *error) {
-  sigset_t signals;
-  if (sigemptyset(&signals) != 0) {
-    baca_error_set(error, BACA_ERROR_EXTERNAL,
-                   "cannot create exit signal mask: %s", strerror(errno));
-    return false;
-  }
-  for (size_t index = 0U; index < BACA_ARRAY_LEN(BACA_EXIT_SIGNALS);
-       ++index) {
-    if (sigaddset(&signals, BACA_EXIT_SIGNALS[index]) != 0) {
-      baca_error_set(error, BACA_ERROR_EXTERNAL,
-                     "cannot create exit signal mask: %s", strerror(errno));
-      return false;
-    }
-  }
-  const int status = pthread_sigmask(SIG_BLOCK, &signals, previous);
-  if (status != 0) {
-    baca_error_set(error, BACA_ERROR_EXTERNAL,
-                   "cannot block exit signals: %s", strerror(status));
-    return false;
-  }
-  return true;
-}
-
-static bool restore_signal_mask(const sigset_t *previous, BacaError *error) {
-  const int status = pthread_sigmask(SIG_SETMASK, previous, NULL);
-  if (status != 0) {
-    baca_error_set(error, BACA_ERROR_EXTERNAL,
-                   "cannot restore signal mask: %s", strerror(status));
-    return false;
-  }
-  return true;
-}
-
-static bool capture_signal_handlers(BacaSignalHandlers *handlers,
-                                    BacaError *error) {
-  for (size_t index = 0U; index < BACA_ARRAY_LEN(BACA_EXIT_SIGNALS);
-       ++index) {
-    if (sigaction(BACA_EXIT_SIGNALS[index], NULL, &handlers->previous[index]) !=
-        0) {
-      const int saved_errno = errno;
-      baca_error_set(error, BACA_ERROR_EXTERNAL,
-                     "cannot inspect signal handler: %s",
-                     strerror(saved_errno));
-      return false;
-    }
-  }
-  return true;
-}
-
-static void restore_signal_handlers(BacaSignalHandlers *handlers) {
-  while (handlers->installed > 0U) {
-    --handlers->installed;
-    (void)sigaction(BACA_EXIT_SIGNALS[handlers->installed],
-                    &handlers->previous[handlers->installed], NULL);
-  }
-}
-
-static bool install_signal_handlers(BacaSignalHandlers *handlers,
-                                    BacaError *error) {
-  struct sigaction action = {0};
-  action.sa_handler = request_exit;
-  (void)sigemptyset(&action.sa_mask);
-  for (size_t index = 0U; index < BACA_ARRAY_LEN(BACA_EXIT_SIGNALS);
-       ++index) {
-    if (sigaction(BACA_EXIT_SIGNALS[index], &action, NULL) != 0) {
-      const int saved_errno = errno;
-      restore_signal_handlers(handlers);
-      baca_error_set(error, BACA_ERROR_EXTERNAL,
-                     "cannot install signal handler: %s",
-                     strerror(saved_errno));
-      return false;
-    }
-    handlers->installed = index + 1U;
-  }
-  return true;
-}
-
-static double monotonic_seconds(void) {
-  struct timespec now = {0};
-  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
-    return 0.0;
-  }
-  return (double)now.tv_sec + (double)now.tv_nsec / 1000000000.0;
-}
 
 static size_t minimum_size(size_t left, size_t right) {
   return left < right ? left : right;
@@ -300,25 +161,6 @@ static size_t minimum_size(size_t left, size_t right) {
 
 static int size_to_int(size_t value) {
   return value > (size_t)INT_MAX ? INT_MAX : (int)value;
-}
-
-static bool terminal_graphics_write(void *user_data, const void *data,
-                                    size_t length) {
-  (void)user_data;
-  const unsigned char *cursor = data;
-  size_t remaining = length;
-  while (remaining > 0U) {
-    const ssize_t written = write(STDOUT_FILENO, cursor, remaining);
-    if (written > 0) {
-      cursor += (size_t)written;
-      remaining -= (size_t)written;
-    } else if (written < 0 && errno == EINTR) {
-      continue;
-    } else {
-      return false;
-    }
-  }
-  return true;
 }
 
 static uint32_t current_background(const BacaTuiState *state) {
@@ -333,7 +175,7 @@ static void delete_kitty_images(BacaTuiState *state) {
   BacaError ignored = {0};
   (void)fflush(stdout);
   (void)baca_graphics_kitty_delete_all(
-      state->graphics, terminal_graphics_write, state, &ignored);
+      state->graphics, baca_terminal_graphics_write, state, &ignored);
 }
 
 static size_t utf8_bytes_for_columns(const char *text, int columns) {
@@ -373,28 +215,6 @@ static void add_clipped(WINDOW *window, int y, int x, const char *text,
   (void)mvwaddnstr(window, y, x, text, size_to_int(bytes));
 }
 
-static void library_add_clipped(WINDOW *window, int y, int x, const char *text,
-                                int columns) {
-  if (window == NULL || text == NULL || columns <= 0) {
-    return;
-  }
-  int height = 0;
-  int width = 0;
-  getmaxyx(window, height, width);
-  if (y < 0 || y >= height || x < 0 || x >= width) {
-    return;
-  }
-  if (columns > width - x) {
-    columns = width - x;
-  }
-  BacaError ignored = {0};
-  char *safe = baca_library_sanitize_text(text, (size_t)columns, &ignored);
-  if (safe != NULL) {
-    (void)mvwaddnstr(window, y, x, safe, size_to_int(strlen(safe)));
-  }
-  free(safe);
-}
-
 static int content_width_for(const BacaConfig *config, int terminal_width) {
   if (terminal_width <= 0) {
     return 1;
@@ -417,19 +237,10 @@ static int content_width_for(const BacaConfig *config, int terminal_width) {
 }
 
 static void update_cell_pixels(BacaTuiState *state) {
-  int width = 1;
-  int height = 2;
-  if (state->image_mode == BACA_IMAGE_MODE_KITTY) {
-    width = 8;
-    height = 16;
-    struct winsize size = {0};
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0 && size.ws_col > 0U &&
-        size.ws_row > 0U && size.ws_xpixel >= size.ws_col &&
-        size.ws_ypixel >= size.ws_row) {
-      width = (int)(size.ws_xpixel / size.ws_col);
-      height = (int)(size.ws_ypixel / size.ws_row);
-    }
-  }
+  int width = 0;
+  int height = 0;
+  baca_terminal_probe_cell_pixels(state->image_mode == BACA_IMAGE_MODE_KITTY,
+                                  &width, &height);
   state->cell_pixel_width = width;
   state->cell_pixel_height = height;
   if (state->graphics != NULL) {
@@ -472,8 +283,8 @@ static void apply_theme(BacaTuiState *state) {
   if (state->graphics != NULL) {
     delete_kitty_images(state);
     BacaError ignored = {0};
-    (void)baca_graphics_set_background(
-        state->graphics, current_background(state), &ignored);
+    (void)baca_graphics_set_background(state->graphics,
+                                       current_background(state), &ignored);
   }
   if (!state->colors) {
     return;
@@ -509,8 +320,8 @@ static void change_style(BacaTuiState *state, int row, int x, int width,
   if (width > state->columns - x) {
     width = state->columns - x;
   }
-  (void)mvwchgat(stdscr, row, x, width, attributes,
-                 state->colors ? pair : 0, NULL);
+  (void)mvwchgat(stdscr, row, x, width, attributes, state->colors ? pair : 0,
+                 NULL);
 }
 
 static bool named_key_matches(const BacaNormalizedKey *key, const char *name) {
@@ -718,12 +529,11 @@ static void pdf_position(const BacaTuiState *state, size_t *page,
     *page = section;
   }
   const size_t start = pdf_page_start(state, *page);
-  const size_t end = *page + 1U < page_count
-                         ? pdf_page_start(state, *page + 1U)
-                         : state->app->layout.line_count;
+  const size_t end = *page + 1U < page_count ? pdf_page_start(state, *page + 1U)
+                                             : state->app->layout.line_count;
   if (end > start + 1U && state->app->scroll_line > start) {
-    const size_t offset = minimum_size(state->app->scroll_line - start,
-                                       end - start - 1U);
+    const size_t offset =
+        minimum_size(state->app->scroll_line - start, end - start - 1U);
     *intra_page = (double)offset / (double)(end - start - 1U);
   }
 }
@@ -737,9 +547,8 @@ static size_t pdf_restore_line(const BacaTuiState *state, double progress) {
     progress = 1.0;
   }
   long double scaled = (long double)progress * (long double)page_count;
-  size_t page = scaled >= (long double)page_count
-                    ? page_count - 1U
-                    : (size_t)scaled;
+  size_t page =
+      scaled >= (long double)page_count ? page_count - 1U : (size_t)scaled;
   double intra_page = scaled >= (long double)page_count
                           ? 1.0
                           : (double)(scaled - (long double)page);
@@ -775,9 +584,8 @@ static void remember_progress(BacaTuiState *state) {
     size_t page = 0U;
     double intra_page = 0.0;
     pdf_position(state, &page, &intra_page);
-    state->app->saved_progress =
-        ((double)page + intra_page) /
-        (double)state->app->document.section_count;
+    state->app->saved_progress = ((double)page + intra_page) /
+                                 (double)state->app->document.section_count;
     return;
   }
   state->app->saved_progress =
@@ -826,8 +634,7 @@ static bool traverse_jump_history(BacaTuiState *state, bool forward) {
   double *source = forward ? state->jumps.forward : state->jumps.backward;
   size_t *source_count =
       forward ? &state->jumps.forward_count : &state->jumps.backward_count;
-  double *destination =
-      forward ? state->jumps.backward : state->jumps.forward;
+  double *destination = forward ? state->jumps.backward : state->jumps.forward;
   size_t *destination_count =
       forward ? &state->jumps.backward_count : &state->jumps.forward_count;
   if (*source_count == 0U) {
@@ -856,12 +663,13 @@ static void scroll_lines(BacaTuiState *state, int lines) {
   set_scroll_line(state, target);
 }
 
-static void start_scroll_animation(BacaTuiState *state, size_t target) {
+static void start_scroll_animation_with_duration(BacaTuiState *state,
+                                                 size_t target,
+                                                 double duration) {
   const size_t maximum = maximum_scroll(state);
   if (target > maximum) {
     target = maximum;
   }
-  const double duration = state->app->config.page_scroll_duration;
   if (!isfinite(duration) || duration <= 0.0 ||
       target == state->app->scroll_line) {
     cancel_animation(state);
@@ -870,16 +678,32 @@ static void start_scroll_animation(BacaTuiState *state, size_t target) {
   }
   state->animation.from = (double)state->app->scroll_line;
   state->animation.to = (double)target;
-  state->animation.started_at = monotonic_seconds();
+  state->animation.started_at = baca_terminal_monotonic_seconds();
   state->animation.duration = duration;
   state->animation.active = true;
+}
+
+static void start_scroll_animation(BacaTuiState *state, size_t target) {
+  start_scroll_animation_with_duration(state, target,
+                                       state->app->config.page_scroll_duration);
+}
+
+static size_t pending_scroll_target(const BacaTuiState *state) {
+  if (!state->animation.active || !isfinite(state->animation.to) ||
+      state->animation.to < 0.0) {
+    return state->app->scroll_line;
+  }
+  if (state->animation.to >= (double)SIZE_MAX) {
+    return SIZE_MAX;
+  }
+  return (size_t)llround(state->animation.to);
 }
 
 static void page_scroll(BacaTuiState *state, bool down, size_t count) {
   const size_t amount = state->rows > 1 ? (size_t)(state->rows - 1) : 1U;
   const size_t maximum = maximum_scroll(state);
   const size_t distance = amount > maximum / count ? maximum : amount * count;
-  size_t target = state->app->scroll_line;
+  size_t target = minimum_size(pending_scroll_target(state), maximum);
   if (down) {
     target = distance > maximum - minimum_size(target, maximum)
                  ? maximum
@@ -894,7 +718,8 @@ static void update_animation(BacaTuiState *state) {
   if (!state->animation.active) {
     return;
   }
-  const double elapsed = monotonic_seconds() - state->animation.started_at;
+  const double elapsed =
+      baca_terminal_monotonic_seconds() - state->animation.started_at;
   double amount = elapsed / state->animation.duration;
   if (amount >= 1.0) {
     state->animation.active = false;
@@ -966,15 +791,15 @@ static void submit_search(BacaTuiState *state) {
   BacaSearchMatch *matches = NULL;
   size_t match_count = 0U;
   BacaError error = {0};
-  if (!baca_layout_search(&state->app->layout, state->prompt.value, &matches,
-                          &match_count, &error)) {
+  if (!baca_layout_search(&state->app->layout, state->prompt.text.value,
+                          &matches, &match_count, &error)) {
     open_alert(state, error.message[0] != '\0' ? error.message
                                                : "Invalid regular expression");
     return;
   }
 
   clear_search(&state->search);
-  state->search.pattern = baca_strdup(state->prompt.value, &error);
+  state->search.pattern = baca_strdup(state->prompt.text.value, &error);
   if (state->search.pattern == NULL) {
     free(matches);
     open_alert(state,
@@ -1024,7 +849,8 @@ static void cancel_search(BacaTuiState *state) {
   if (!state->search.active) {
     return;
   }
-  const size_t target = restore_progress_line(state, state->search.saved_progress);
+  const size_t target =
+      restore_progress_line(state, state->search.saved_progress);
   clear_search(&state->search);
   start_scroll_animation(state, target);
 }
@@ -1044,11 +870,11 @@ static bool refresh_search_after_layout(BacaTuiState *state) {
   state->search.match_count = 0U;
   BacaError error = {0};
   if (!baca_layout_search(&state->app->layout, state->search.pattern,
-                           &state->search.matches, &state->search.match_count,
-                           &error)) {
+                          &state->search.matches, &state->search.match_count,
+                          &error)) {
     open_alert(state, error.message[0] != '\0'
-                           ? error.message
-                           : "Search match disappeared after resize");
+                          ? error.message
+                          : "Search match disappeared after resize");
     clear_search(&state->search);
     return false;
   }
@@ -1133,7 +959,7 @@ static bool build_layout_in_background(BacaTuiState *state, BacaLayout *layout,
     unsigned phase = 0U;
     draw_loader(state, phase++);
     while (!atomic_load_explicit(&job.done, memory_order_acquire)) {
-      if (baca_exit_signal != 0) {
+      if (baca_terminal_runtime_interrupted()) {
         state->quit = true;
         atomic_store_explicit(&job.cancel, true, memory_order_relaxed);
       }
@@ -1150,7 +976,7 @@ static bool build_layout_in_background(BacaTuiState *state, BacaLayout *layout,
       const int status = wget_wch(stdscr, &input);
       const BacaNormalizedKey key =
           read_normalized_key(&state->app->config, status, input);
-      if (baca_exit_signal != 0) {
+      if (baca_terminal_runtime_interrupted()) {
         state->quit = true;
         atomic_store_explicit(&job.cancel, true, memory_order_relaxed);
       }
@@ -1170,7 +996,8 @@ static bool build_layout_in_background(BacaTuiState *state, BacaLayout *layout,
                      "cannot join parser thread: %s", strerror(join_result));
       return false;
     }
-    const bool cancelled = atomic_load_explicit(&job.cancel, memory_order_relaxed);
+    const bool cancelled =
+        atomic_load_explicit(&job.cancel, memory_order_relaxed);
     if (!atomic_load_explicit(&job.succeeded, memory_order_relaxed)) {
       baca_layout_free(&job.layout);
       if (cancelled) {
@@ -1240,11 +1067,11 @@ static bool open_external(BacaTuiState *state, const char *target,
   const int previous_rows = state->rows;
   const int previous_content_width = state->content_width;
   (void)endwin();
-  bool opened = state->app->external_opener != NULL
-                    ? state->app->external_opener(
-                          state->app->external_opener_data, target, preferred,
-                          error)
-                    : baca_platform_open(target, preferred, error);
+  bool opened =
+      state->app->external_opener != NULL
+          ? state->app->external_opener(state->app->external_opener_data,
+                                        target, preferred, error)
+          : baca_platform_open(target, preferred, error);
   if (reset_prog_mode() == ERR) {
     if (opened) {
       baca_error_set(error, BACA_ERROR_EXTERNAL,
@@ -1257,7 +1084,7 @@ static bool open_external(BacaTuiState *state, const char *target,
   (void)clearok(stdscr, true);
   update_dimensions(state);
 
-  if (baca_exit_signal == 0 &&
+  if (!baca_terminal_runtime_interrupted() &&
       previous_content_width != state->content_width) {
     BacaError resize_error = {0};
     if (!rebuild_layout(state, &resize_error) && !state->quit) {
@@ -1391,8 +1218,8 @@ static void style_text_line(BacaTuiState *state, int row, int x,
 }
 
 static void highlight_search_match(BacaTuiState *state, int row, int x,
-                                    size_t line_index, const char *raw,
-                                    const char *rendered) {
+                                   size_t line_index, const char *raw,
+                                   const char *rendered) {
   if (!state->search.active ||
       state->search.current_match >= state->search.match_count) {
     return;
@@ -1431,7 +1258,8 @@ static bool pdf_render_failure_matches(const BacaTuiState *state,
       state->pdf_render_failures == NULL) {
     return false;
   }
-  const BacaPdfRenderFailure *failure = &state->pdf_render_failures[block_index];
+  const BacaPdfRenderFailure *failure =
+      &state->pdf_render_failures[block_index];
   return failure->valid && failure->columns == state->content_width &&
          failure->rows == line->image_rows &&
          failure->cell_pixel_width == state->cell_pixel_width &&
@@ -1467,8 +1295,8 @@ static bool mark_image_failure(BacaTuiState *state, size_t block_index,
       state->app->document.blocks[block_index].kind == BACA_BLOCK_IMAGE) {
     BacaImageBlock *image =
         &state->app->document.blocks[block_index].value.image;
-    rendered_pdf_page =
-        state->app->document.format == BACA_FORMAT_PDF && image->page_index >= 0;
+    rendered_pdf_page = state->app->document.format == BACA_FORMAT_PDF &&
+                        image->page_index >= 0;
     if (rendered_pdf_page &&
         (error == NULL || (error->code != BACA_ERROR_CORRUPT &&
                            error->code != BACA_ERROR_UNSUPPORTED))) {
@@ -1477,7 +1305,8 @@ static bool mark_image_failure(BacaTuiState *state, size_t block_index,
         return false;
       }
       BacaPdfRenderFailure *failure = &state->pdf_render_failures[block_index];
-      const bool repeated = pdf_render_failure_matches(state, block_index, line);
+      const bool repeated =
+          pdf_render_failure_matches(state, block_index, line);
       *failure = (BacaPdfRenderFailure){
           .columns = state->content_width,
           .rows = line->image_rows,
@@ -1495,13 +1324,11 @@ static bool mark_image_failure(BacaTuiState *state, size_t block_index,
   return rendered_pdf_page;
 }
 
-static bool prepare_image_placement(BacaTuiState *state,
-                                    const BacaLayoutLine *line, int row,
-                                    const BacaGraphicsRect *occlusions,
-                                    size_t occlusion_count,
-                                    BacaGraphicsSurface *surface,
-                                    BacaGraphicsPlacement *placement,
-                                    BacaError *error) {
+static bool
+prepare_image_placement(BacaTuiState *state, const BacaLayoutLine *line,
+                        int row, const BacaGraphicsRect *occlusions,
+                        size_t occlusion_count, BacaGraphicsSurface *surface,
+                        BacaGraphicsPlacement *placement, BacaError *error) {
   if (state->graphics == NULL || line->image_placeholder ||
       line->block_index >= state->app->document.block_count) {
     return false;
@@ -1534,12 +1361,11 @@ static bool draw_image_cell(void *user_data, int row, int column,
   const unsigned background_index =
       baca_graphics_rgb_to_palette(background, (unsigned)COLORS);
   bool created = false;
-  const short pair = baca_graphics_pair(
-      state->graphics, foreground_index, background_index,
-      BACA_PAIR_IMAGE_FIRST, state->image_pair_capacity, &created);
-  if (pair <= 0 ||
-      (created && init_pair(pair, (short)foreground_index,
-                            (short)background_index) == ERR)) {
+  const short pair = baca_graphics_pair(state->graphics, foreground_index,
+                                        background_index, BACA_PAIR_IMAGE_FIRST,
+                                        state->image_pair_capacity, &created);
+  if (pair <= 0 || (created && init_pair(pair, (short)foreground_index,
+                                         (short)background_index) == ERR)) {
     return false;
   }
   cchar_t character = {0};
@@ -1547,24 +1373,23 @@ static bool draw_image_cell(void *user_data, int row, int column,
          mvwadd_wch(stdscr, row, column, &character) != ERR;
 }
 
-static bool draw_ncurses_image(BacaTuiState *state,
-                               const BacaLayoutLine *line, int row,
-                               BacaError *error) {
+static bool draw_ncurses_image(BacaTuiState *state, const BacaLayoutLine *line,
+                               int row, BacaError *error) {
   BacaGraphicsSurface surface = {0};
   BacaGraphicsPlacement placement = {0};
-  if (!prepare_image_placement(state, line, row, NULL, 0U, &surface,
-                               &placement, error)) {
+  if (!prepare_image_placement(state, line, row, NULL, 0U, &surface, &placement,
+                               error)) {
     return false;
   }
-  const bool drawn = baca_graphics_render_cells(
-      &surface, &placement, draw_image_cell, state, error);
+  const bool drawn = baca_graphics_render_cells(&surface, &placement,
+                                                draw_image_cell, state, error);
   baca_graphics_surface_release(&surface);
   return drawn;
 }
 
 static bool image_content_bounds(const BacaTuiState *state,
-                                 const BacaLayoutLine *line,
-                                 size_t line_index, int *x, int *width) {
+                                 const BacaLayoutLine *line, size_t line_index,
+                                 int *x, int *width) {
   if (line->kind != BACA_LAYOUT_IMAGE ||
       line->block_index >= state->app->document.block_count) {
     return false;
@@ -1594,9 +1419,8 @@ static bool image_content_bounds(const BacaTuiState *state,
       line->image_rows > 0 ? (size_t)line->image_rows : 1U;
   const size_t image_start =
       line_index >= image_row ? line_index - image_row : 0U;
-  const size_t image_end = image_rows > SIZE_MAX - image_start
-                               ? SIZE_MAX
-                               : image_start + image_rows;
+  const size_t image_end =
+      image_rows > SIZE_MAX - image_start ? SIZE_MAX : image_start + image_rows;
   const size_t viewport_end =
       (size_t)state->rows > SIZE_MAX - state->app->scroll_line
           ? SIZE_MAX
@@ -1604,14 +1428,14 @@ static bool image_content_bounds(const BacaTuiState *state,
   const size_t visible_start = image_start > state->app->scroll_line
                                    ? image_start
                                    : state->app->scroll_line;
-  const size_t visible_end = image_end < viewport_end ? image_end : viewport_end;
+  const size_t visible_end =
+      image_end < viewport_end ? image_end : viewport_end;
   if (visible_start >= visible_end ||
       line_index != visible_start + (visible_end - visible_start - 1U) / 2U) {
     return false;
   }
   const int label_width = (int)(sizeof(BACA_IMAGE_PLACEHOLDER) - 1U);
-  int image_x =
-      state->content_x + (state->content_width - label_width) / 2;
+  int image_x = state->content_x + (state->content_width - label_width) / 2;
   if (image_x < 0) {
     image_x = 0;
   }
@@ -1631,16 +1455,15 @@ static bool image_content_bounds(const BacaTuiState *state,
 }
 
 static void draw_image_placeholder(const BacaTuiState *state,
-                                    const BacaLayoutLine *line, int row,
-                                    size_t line_index) {
+                                   const BacaLayoutLine *line, int row,
+                                   size_t line_index) {
   const size_t image_row = line->image_row > 0 ? (size_t)line->image_row : 0U;
   const size_t image_rows =
       line->image_rows > 0 ? (size_t)line->image_rows : 1U;
   const size_t image_start =
       line_index >= image_row ? line_index - image_row : 0U;
-  const size_t image_end = image_rows > SIZE_MAX - image_start
-                               ? SIZE_MAX
-                               : image_start + image_rows;
+  const size_t image_end =
+      image_rows > SIZE_MAX - image_start ? SIZE_MAX : image_start + image_rows;
   const size_t viewport_end =
       (size_t)state->rows > SIZE_MAX - state->app->scroll_line
           ? SIZE_MAX
@@ -1648,7 +1471,8 @@ static void draw_image_placeholder(const BacaTuiState *state,
   const size_t visible_start = image_start > state->app->scroll_line
                                    ? image_start
                                    : state->app->scroll_line;
-  const size_t visible_end = image_end < viewport_end ? image_end : viewport_end;
+  const size_t visible_end =
+      image_end < viewport_end ? image_end : viewport_end;
   if (visible_start >= visible_end ||
       line_index != visible_start + (visible_end - visible_start - 1U) / 2U) {
     return;
@@ -1677,8 +1501,7 @@ static void draw_document_line(BacaTuiState *state, int row,
             ? &state->app->document.blocks[line->block_index].value.image
             : NULL;
     if (image != NULL && !image->broken && !line->image_placeholder &&
-        state->image_mode == BACA_IMAGE_MODE_ANSI &&
-        !state->raw_truecolor &&
+        state->image_mode == BACA_IMAGE_MODE_ANSI && !state->raw_truecolor &&
         first_visible_image_line(state, row, line_index)) {
       BacaError image_error = {0};
       if (!draw_ncurses_image(state, line, row, &image_error)) {
@@ -1749,6 +1572,30 @@ static void draw_scrollbar(BacaTuiState *state) {
   (void)wattroff(stdscr, state->colors ? COLOR_PAIR(BACA_PAIR_ACCENT) : A_BOLD);
 }
 
+static void draw_reader_help_hint(BacaTuiState *state) {
+  const BacaKeyList *keys = &state->app->config.keymaps.open_help;
+  if (state->rows < 1 || keys->length == 0U || keys->items[0] == NULL ||
+      state->overlay != BACA_OVERLAY_NONE || state->prompt.active) {
+    return;
+  }
+  const char *configured = keys->items[0];
+  const char *key =
+      baca_casecmp(configured, "question_mark") == 0 ? "?" : configured;
+  char hint[64] = {0};
+  (void)snprintf(hint, sizeof(hint), "%s help", key);
+  const int width = size_to_int(strlen(hint));
+  const int x = state->content_x + state->content_width + 1;
+  if (x < 0 || x + width >= state->columns - 1) {
+    return;
+  }
+  (void)wattron(stdscr,
+                A_DIM | (state->colors ? COLOR_PAIR(BACA_PAIR_BASE) : 0));
+  (void)mvwhline(stdscr, state->rows - 1, x, ' ', width);
+  add_clipped(stdscr, state->rows - 1, x, hint, width);
+  (void)wattroff(stdscr,
+                 A_DIM | (state->colors ? COLOR_PAIR(BACA_PAIR_BASE) : 0));
+}
+
 static BacaOverlayBox overlay_box(const BacaTuiState *state) {
   int width = state->columns - state->columns / 5;
   int height = state->rows - state->rows / 5;
@@ -1778,7 +1625,7 @@ static const char *overlay_title(BacaOverlayKind overlay) {
   case BACA_OVERLAY_METADATA:
     return "Metadata";
   case BACA_OVERLAY_HELP:
-    return "Keymaps";
+    return "Help";
   case BACA_OVERLAY_ALERT:
     return "!";
   case BACA_OVERLAY_NONE:
@@ -1838,8 +1685,7 @@ static void draw_bookmarks_overlay(BacaTuiState *state, WINDOW *window,
   }
   if (state->bookmark_index < state->overlay_scroll) {
     state->overlay_scroll = state->bookmark_index;
-  } else if (state->bookmark_index >=
-             state->overlay_scroll + (size_t)visible) {
+  } else if (state->bookmark_index >= state->overlay_scroll + (size_t)visible) {
     state->overlay_scroll = state->bookmark_index - (size_t)visible + 1U;
   }
 
@@ -1869,17 +1715,24 @@ static void draw_bookmarks_overlay(BacaTuiState *state, WINDOW *window,
 static void draw_metadata_overlay(BacaTuiState *state, WINDOW *window,
                                   int height, int width) {
   static const char *const names[] = {
-      "Title",      "Author",   "Creator",      "Description",
-      "Publisher",  "Producer", "Date",         "Created",
-      "Modified",   "Language", "Format",       "Identifier",
-      "Source",
+      "Title",    "Author",     "Creator", "Description", "Publisher",
+      "Producer", "Date",       "Created", "Modified",    "Language",
+      "Format",   "Identifier", "Source",
   };
   const BacaMetadata *metadata = &state->app->document.metadata;
   const char *const values[] = {
-      metadata->title,       metadata->author,       metadata->creator,
-      metadata->description, metadata->publisher,    metadata->producer,
-      metadata->date,        metadata->creation_date, metadata->modification_date,
-      metadata->language,    metadata->format,       metadata->identifier,
+      metadata->title,
+      metadata->author,
+      metadata->creator,
+      metadata->description,
+      metadata->publisher,
+      metadata->producer,
+      metadata->date,
+      metadata->creation_date,
+      metadata->modification_date,
+      metadata->language,
+      metadata->format,
+      metadata->identifier,
       metadata->source,
   };
   const int visible = height > 2 ? height - 2 : 0;
@@ -1899,18 +1752,19 @@ static void draw_metadata_overlay(BacaTuiState *state, WINDOW *window,
 static void draw_key_list(WINDOW *window, int row, int width, const char *name,
                           const BacaKeyList *keys) {
   (void)wattron(window, A_BOLD);
-  add_clipped(window, row, 2, name, 20);
-  (void)wattroff(window, A_BOLD);
-  int x = 23;
-  for (size_t index = 0U; index < keys->length && x < width - 1; ++index) {
+  const int key_end = width < 23 ? width - 1 : 22;
+  int x = 2;
+  for (size_t index = 0U; index < keys->length && x < key_end; ++index) {
     if (index > 0U) {
       add_clipped(window, row, x, ",", 1);
       ++x;
     }
     const char *key = keys->items[index];
-    add_clipped(window, row, x, key, width - x - 1);
+    add_clipped(window, row, x, key, key_end - x);
     x += size_to_int(baca_utf8_width(key, strlen(key)));
   }
+  (void)wattroff(window, A_BOLD);
+  add_clipped(window, row, 23, name, width - 24);
 }
 
 static void draw_help_overlay(BacaTuiState *state, WINDOW *window, int height,
@@ -1925,54 +1779,72 @@ static void draw_help_overlay(BacaTuiState *state, WINDOW *window, int height,
       .items = jump_forward_items,
       .length = BACA_ARRAY_LEN(jump_forward_items),
   };
-  static const char *const names[] = {
-      "Toggle light/dark",
-      "Scroll down",
-      "Scroll up",
-      "Page down",
-      "Page up",
-      "Home",
-      "End",
-      "Open TOC",
-      "Add bookmark",
-      "Open bookmarks",
-      "Open metadata",
-      "Open help",
-      "Search forward",
-      "Search backward",
-      "Next match",
-      "Previous match",
-      "Confirm",
-      "Close or quit",
-      "Jump back",
-      "Jump forward",
-      "Screenshot",
-      "Toggle PDF view",
-  };
   const BacaKeymaps *maps = &state->app->config.keymaps;
-  const BacaKeyList *const lists[] = {
-      &maps->toggle_dark,      &maps->scroll_down,
-      &maps->scroll_up,        &maps->page_down,
-      &maps->page_up,          &maps->home,
-      &maps->end,              &maps->open_toc,
-      &maps->add_bookmark,     &maps->open_bookmarks,
-      &maps->open_metadata,    &maps->open_help,
-      &maps->search_forward,   &maps->search_backward,
-      &maps->next_match,       &maps->previous_match,
-      &maps->confirm,          &maps->close,
-      &jump_back,              &jump_forward,
-      &maps->screenshot,       &maps->toggle_pdf_view,
-  };
-  const size_t count = state->app->document.format == BACA_FORMAT_PDF
-                           ? BACA_ARRAY_LEN(names)
-                           : BACA_ARRAY_LEN(names) - 1U;
+  typedef struct BacaReaderHelpLine {
+    const char *description;
+    const BacaKeyList *keys;
+  } BacaReaderHelpLine;
+  BacaReaderHelpLine lines[BACA_PDF_HELP_LINE_COUNT] = {0};
+  size_t count = 0U;
+#define BACA_HELP_APPEND(value, key_list)                                      \
+  do {                                                                         \
+    if (count < BACA_ARRAY_LEN(lines)) {                                       \
+      lines[count++] =                                                         \
+          (BacaReaderHelpLine){.description = (value), .keys = (key_list)};    \
+    }                                                                          \
+  } while (false)
+#define BACA_HELP_SECTION(value) BACA_HELP_APPEND((value), NULL)
+#define BACA_HELP_ENTRY(value, key_list) BACA_HELP_APPEND((value), (key_list))
+  BACA_HELP_SECTION("reading");
+  BACA_HELP_ENTRY("switch between light and dark", &maps->toggle_dark);
+  BACA_HELP_ENTRY("scroll down", &maps->scroll_down);
+  BACA_HELP_ENTRY("scroll up", &maps->scroll_up);
+  BACA_HELP_ENTRY("move down one screen", &maps->page_down);
+  BACA_HELP_ENTRY("move up one screen", &maps->page_up);
+  BACA_HELP_ENTRY("go to the start", &maps->home);
+  BACA_HELP_ENTRY("go to the end", &maps->end);
+  BACA_HELP_ENTRY("open the table of contents", &maps->open_toc);
+  if (state->app->document.format == BACA_FORMAT_PDF) {
+    BACA_HELP_SECTION("pdf");
+    BACA_HELP_ENTRY("switch between fixed and reflow view",
+                    &maps->toggle_pdf_view);
+  }
+  BACA_HELP_SECTION("bookmarks and details");
+  BACA_HELP_ENTRY("add a bookmark", &maps->add_bookmark);
+  BACA_HELP_ENTRY("open bookmarks", &maps->open_bookmarks);
+  BACA_HELP_ENTRY("open document details", &maps->open_metadata);
+  BACA_HELP_ENTRY("save a terminal screenshot", &maps->screenshot);
+  BACA_HELP_SECTION("search");
+  BACA_HELP_ENTRY("search forward", &maps->search_forward);
+  BACA_HELP_ENTRY("search backward", &maps->search_backward);
+  BACA_HELP_ENTRY("go to the next match", &maps->next_match);
+  BACA_HELP_ENTRY("go to the previous match", &maps->previous_match);
+  BACA_HELP_ENTRY("clear search highlights", &maps->confirm);
+  BACA_HELP_SECTION("jump history");
+  BACA_HELP_ENTRY("jump back", &jump_back);
+  BACA_HELP_ENTRY("jump forward", &jump_forward);
+  BACA_HELP_SECTION("application");
+  BACA_HELP_ENTRY("open this help", &maps->open_help);
+  BACA_HELP_ENTRY("close a popup or quit", &maps->close);
+#undef BACA_HELP_ENTRY
+#undef BACA_HELP_SECTION
+#undef BACA_HELP_APPEND
   const int visible = height > 2 ? height - 2 : 0;
   for (int row = 0; row < visible; ++row) {
     const size_t index = state->overlay_scroll + (size_t)row;
     if (index >= count) {
       break;
     }
-    draw_key_list(window, row + 1, width, names[index], lists[index]);
+    if (lines[index].keys == NULL) {
+      (void)wattron(
+          window, A_BOLD | (state->colors ? COLOR_PAIR(BACA_PAIR_ACCENT) : 0));
+      add_clipped(window, row + 1, 2, lines[index].description, width - 3);
+      (void)wattroff(
+          window, A_BOLD | (state->colors ? COLOR_PAIR(BACA_PAIR_ACCENT) : 0));
+    } else {
+      draw_key_list(window, row + 1, width, lines[index].description,
+                    lines[index].keys);
+    }
   }
 }
 
@@ -2052,9 +1924,10 @@ static void draw_prompt(BacaTuiState *state) {
   const int input_row = state->rows >= 2 ? state->rows - 2 : state->rows - 1;
   const char marker[3] = {state->prompt.forward ? '/' : '?', ' ', '\0'};
   add_clipped(stdscr, input_row, 1, marker, state->columns - 1);
-  add_clipped(stdscr, input_row, 3, state->prompt.value, state->columns - 4);
-  int cursor_x = 3 + size_to_int(baca_utf8_width(state->prompt.value,
-                                                 state->prompt.cursor));
+  add_clipped(stdscr, input_row, 3, state->prompt.text.value,
+              state->columns - 4);
+  int cursor_x = 3 + size_to_int(baca_utf8_width(state->prompt.text.value,
+                                                 state->prompt.text.cursor));
   if (cursor_x >= state->columns) {
     cursor_x = state->columns - 1;
   }
@@ -2095,13 +1968,14 @@ static void begin_terminal_graphics_frame(BacaTuiState *state) {
   BacaError ignored = {0};
   (void)fflush(stdout);
   (void)baca_graphics_kitty_delete_placements(
-      state->graphics, terminal_graphics_write, state, &ignored);
+      state->graphics, baca_terminal_graphics_write, state, &ignored);
 }
 
 static void draw_terminal_graphics(BacaTuiState *state) {
-  const bool raw_ansi = state->image_mode == BACA_IMAGE_MODE_ANSI &&
-                         state->raw_truecolor;
-  if (state->graphics == NULL && state->image_mode != BACA_IMAGE_MODE_PLACEHOLDER) {
+  const bool raw_ansi =
+      state->image_mode == BACA_IMAGE_MODE_ANSI && state->raw_truecolor;
+  if (state->graphics == NULL &&
+      state->image_mode != BACA_IMAGE_MODE_PLACEHOLDER) {
     return;
   }
   if (!raw_ansi && state->image_mode != BACA_IMAGE_MODE_KITTY) {
@@ -2118,8 +1992,7 @@ static void draw_terminal_graphics(BacaTuiState *state) {
       break;
     }
     const BacaLayoutLine *line = &state->app->layout.lines[line_index];
-    if (line->kind != BACA_LAYOUT_IMAGE ||
-        line->image_placeholder ||
+    if (line->kind != BACA_LAYOUT_IMAGE || line->image_placeholder ||
         !first_visible_image_line(state, row, line_index) ||
         line->block_index >= state->app->document.block_count ||
         state->app->document.blocks[line->block_index].value.image.broken) {
@@ -2129,24 +2002,23 @@ static void draw_terminal_graphics(BacaTuiState *state) {
     BacaGraphicsSurface surface = {0};
     BacaGraphicsPlacement placement = {0};
     BacaError ignored = {0};
-    if (!prepare_image_placement(state, line, row, occlusions,
-                                 occlusion_count, &surface, &placement,
-                                 &ignored)) {
+    if (!prepare_image_placement(state, line, row, occlusions, occlusion_count,
+                                 &surface, &placement, &ignored)) {
       const bool newly_failed =
           mark_image_failure(state, line->block_index, line, &ignored);
-      if (newly_failed &&
-          ignored.message[0] != '\0') {
+      if (newly_failed && ignored.message[0] != '\0') {
         open_alert(state, ignored.message);
       }
       continue;
     }
-    const bool drawn = raw_ansi
-                           ? baca_graphics_render_ansi(
-                                 &surface, &placement, terminal_graphics_write,
-                                 state, &ignored)
-                           : baca_graphics_kitty_draw(
-                                  state->graphics, &surface, &placement,
-                                  terminal_graphics_write, state, &ignored);
+    const bool drawn =
+        raw_ansi
+            ? baca_graphics_render_ansi(&surface, &placement,
+                                        baca_terminal_graphics_write, state,
+                                        &ignored)
+            : baca_graphics_kitty_draw(state->graphics, &surface, &placement,
+                                       baca_terminal_graphics_write, state,
+                                       &ignored);
     baca_graphics_surface_release(&surface);
     if (!drawn) {
       if (mark_image_failure(state, line->block_index, line, &ignored) &&
@@ -2169,6 +2041,7 @@ static void draw_frame(BacaTuiState *state) {
     draw_document_line(state, row, state->app->scroll_line + (size_t)row);
   }
   draw_scrollbar(state);
+  draw_reader_help_hint(state);
   draw_prompt(state);
   (void)wnoutrefresh(stdscr);
   draw_overlay(state);
@@ -2226,8 +2099,7 @@ static void open_toc(BacaTuiState *state) {
 static void add_bookmark(BacaTuiState *state) {
   remember_progress(state);
   BacaError error = {0};
-  if (!baca_database_add_bookmark(&state->app->database,
-                                  state->app->source,
+  if (!baca_database_add_bookmark(&state->app->database, state->app->source,
                                   state->app->saved_progress, &error)) {
     open_alert(state, error.message);
     return;
@@ -2241,8 +2113,7 @@ static void add_bookmark(BacaTuiState *state) {
 static void open_bookmarks(BacaTuiState *state) {
   baca_bookmarks_free(&state->bookmarks);
   BacaError error = {0};
-  if (!baca_database_bookmarks(&state->app->database,
-                               state->app->source,
+  if (!baca_database_bookmarks(&state->app->database, state->app->source,
                                &state->bookmarks, &error)) {
     open_alert(state, error.message);
     return;
@@ -2334,13 +2205,11 @@ static void move_bookmark_selection(BacaTuiState *state, int amount) {
     return;
   }
   if (amount < 0) {
-    state->bookmark_index = state->bookmark_index == 0U
-                                ? count - 1U
-                                : state->bookmark_index - 1U;
+    state->bookmark_index =
+        state->bookmark_index == 0U ? count - 1U : state->bookmark_index - 1U;
   } else {
-    state->bookmark_index = state->bookmark_index + 1U >= count
-                                ? 0U
-                                : state->bookmark_index + 1U;
+    state->bookmark_index =
+        state->bookmark_index + 1U >= count ? 0U : state->bookmark_index + 1U;
   }
   state->dirty = true;
 }
@@ -2363,8 +2232,8 @@ static void remove_bookmark_selection(BacaTuiState *state) {
   }
   const int64_t id = state->bookmarks.items[state->bookmark_index].id;
   BacaError error = {0};
-  if (!baca_database_remove_bookmark(&state->app->database,
-                                     state->app->source, id, &error)) {
+  if (!baca_database_remove_bookmark(&state->app->database, state->app->source,
+                                     id, &error)) {
     open_alert(state, error.message);
     return;
   }
@@ -2385,53 +2254,6 @@ static void follow_toc_selection(BacaTuiState *state) {
   state->dirty = true;
 }
 
-static size_t previous_utf8_boundary(const char *value, size_t offset) {
-  if (offset == 0U) {
-    return 0U;
-  }
-  --offset;
-  while (offset > 0U && ((unsigned char)value[offset] & 0xc0U) == 0x80U) {
-    --offset;
-  }
-  return offset;
-}
-
-static size_t next_utf8_boundary(const char *value, size_t length,
-                                 size_t offset) {
-  if (offset >= length) {
-    return length;
-  }
-  int columns = 0;
-  const size_t next = baca_utf8_next(value, length, offset, &columns);
-  return next > offset ? next : minimum_size(offset + 1U, length);
-}
-
-static void prompt_delete_range(BacaPromptState *prompt, size_t start,
-                                size_t end) {
-  if (start >= end || end > prompt->length) {
-    return;
-  }
-  memmove(prompt->value + start, prompt->value + end,
-          prompt->length - end + 1U);
-  prompt->length -= end - start;
-  prompt->cursor = start;
-}
-
-static void prompt_insert(BacaPromptState *prompt, wchar_t character) {
-  char encoded[MB_LEN_MAX] = {0};
-  mbstate_t conversion = {0};
-  const size_t length = wcrtomb(encoded, character, &conversion);
-  if (length == (size_t)-1 ||
-      prompt->length + length >= sizeof(prompt->value)) {
-    return;
-  }
-  memmove(prompt->value + prompt->cursor + length,
-          prompt->value + prompt->cursor, prompt->length - prompt->cursor + 1U);
-  memcpy(prompt->value + prompt->cursor, encoded, length);
-  prompt->cursor += length;
-  prompt->length += length;
-}
-
 static void handle_prompt_key(BacaTuiState *state,
                               const BacaNormalizedKey *key) {
   BacaPromptState *prompt = &state->prompt;
@@ -2446,39 +2268,8 @@ static void handle_prompt_key(BacaTuiState *state,
     state->dirty = true;
     return;
   }
-  if ((key->key_code && key->code == KEY_BACKSPACE) ||
-      (!key->key_code && (key->character == 8 || key->character == 127))) {
-    const size_t start = previous_utf8_boundary(prompt->value, prompt->cursor);
-    prompt_delete_range(prompt, start, prompt->cursor);
-  } else if (key->key_code && key->code == KEY_DC) {
-    prompt_delete_range(
-        prompt, prompt->cursor,
-        next_utf8_boundary(prompt->value, prompt->length, prompt->cursor));
-  } else if ((key->key_code && key->code == KEY_LEFT)) {
-    prompt->cursor = previous_utf8_boundary(prompt->value, prompt->cursor);
-  } else if ((key->key_code && key->code == KEY_RIGHT)) {
-    prompt->cursor =
-        next_utf8_boundary(prompt->value, prompt->length, prompt->cursor);
-  } else if ((key->key_code && key->code == KEY_HOME) ||
-             (!key->key_code && key->character == 1)) {
-    prompt->cursor = 0U;
-  } else if ((key->key_code && key->code == KEY_END) ||
-             (!key->key_code && key->character == 5)) {
-    prompt->cursor = prompt->length;
-  } else if (!key->key_code && key->character == 23) {
-    size_t start = prompt->cursor;
-    while (start > 0U &&
-           isspace((unsigned char)prompt->value[start - 1U]) != 0) {
-      --start;
-    }
-    while (start > 0U &&
-           isspace((unsigned char)prompt->value[start - 1U]) == 0) {
-      --start;
-    }
-    prompt_delete_range(prompt, start, prompt->cursor);
-  } else if (!key->key_code && iswprint((wint_t)key->character) != 0) {
-    prompt_insert(prompt, key->character);
-  }
+  (void)baca_text_input_apply(&prompt->text, key->key_code, key->code,
+                              key->character);
   state->dirty = true;
 }
 
@@ -2556,9 +2347,8 @@ static bool follow_link(BacaTuiState *state, const char *link,
     return false;
   }
   BacaError error = {0};
-  const bool pdf_page_link =
-      state->app->document.format == BACA_FORMAT_PDF &&
-      strncmp(link, "pdf://page/", 11U) == 0;
+  const bool pdf_page_link = state->app->document.format == BACA_FORMAT_PDF &&
+                             strncmp(link, "pdf://page/", 11U) == 0;
   if (!pdf_page_link && baca_is_external_uri(link)) {
     if (!open_external(state, link, NULL, &error)) {
       open_alert(state, error.message);
@@ -2590,11 +2380,10 @@ static void cleanup_temp_directories(BacaTuiState *state) {
 static bool remember_temp_directory(BacaTuiState *state, char *directory,
                                     BacaError *error) {
   BacaError reserve_error = {0};
-  char **temp_directories =
-      baca_array_reserve(state->temp_directories,
-                         &state->temp_directory_capacity,
-                         sizeof(*state->temp_directories),
-                         state->temp_directory_count + 1U, &reserve_error);
+  char **temp_directories = baca_array_reserve(
+      state->temp_directories, &state->temp_directory_capacity,
+      sizeof(*state->temp_directories), state->temp_directory_count + 1U,
+      &reserve_error);
   if (baca_error_is_set(&reserve_error)) {
     if (error != NULL) {
       *error = reserve_error;
@@ -2675,8 +2464,8 @@ static void open_image(BacaTuiState *state, size_t block_index) {
     char *filename = directory == NULL
                          ? NULL
                          : resource_filename(image, &empty_resource, &error);
-    char *path = filename == NULL ? NULL
-                                  : baca_path_join(directory, filename, &error);
+    char *path =
+        filename == NULL ? NULL : baca_path_join(directory, filename, &error);
     if (path == NULL ||
         !baca_image_export_original(&state->app->document, path, &error)) {
       open_alert(state, error.message[0] != '\0'
@@ -2686,8 +2475,8 @@ static void open_image(BacaTuiState *state, size_t block_index) {
       open_alert(state, error.message);
     } else {
       directory = NULL;
-      if (!open_external(state, path,
-                         state->app->config.preferred_image_viewer, &error)) {
+      if (!open_external(state, path, state->app->config.preferred_image_viewer,
+                         &error)) {
         open_alert(state, error.message);
       }
     }
@@ -2759,8 +2548,7 @@ static const char *image_link_at_position(const BacaTuiState *state,
   }
   const double x = ((double)(absolute_x - state->content_x) + 0.5) /
                    (double)state->content_width;
-  const double y = ((double)line->image_row + 0.5) /
-                   (double)line->image_rows;
+  const double y = ((double)line->image_row + 0.5) / (double)line->image_rows;
   for (size_t index = 0U; index < block->value.image.link_count; ++index) {
     const BacaImageLink *link = &block->value.image.links[index];
     if (x >= link->x && x < link->x + link->width && y >= link->y &&
@@ -3073,23 +2861,23 @@ static size_t take_reader_count(BacaTuiState *state, bool *explicit_count) {
   return count;
 }
 
-static void scroll_reader_lines(BacaTuiState *state, bool down,
-                                size_t count) {
+static void scroll_reader_lines(BacaTuiState *state, bool down, size_t count) {
   const size_t maximum = maximum_scroll(state);
-  const size_t current = minimum_size(state->app->scroll_line, maximum);
-  const size_t target = down
-                            ? (count > maximum - current ? maximum
-                                                         : current + count)
-                            : (count > current ? 0U : current - count);
-  cancel_animation(state);
-  set_scroll_line(state, target);
+  const size_t current = minimum_size(pending_scroll_target(state), maximum);
+  const size_t target =
+      down ? (count > maximum - current ? maximum : current + count)
+           : (count > current ? 0U : current - count);
+  double duration = state->app->config.page_scroll_duration;
+  if (isfinite(duration) && duration > 0.12) {
+    duration = 0.12;
+  }
+  start_scroll_animation_with_duration(state, target, duration);
 }
 
 static void handle_reader_key(BacaTuiState *state,
                               const BacaNormalizedKey *key) {
   if (key->command == BACA_COMMAND_QUIT &&
-      (state->reader_command.count_active ||
-       state->reader_command.g_pending)) {
+      (state->reader_command.count_active || state->reader_command.g_pending)) {
     reset_reader_command(state);
     return;
   }
@@ -3251,9 +3039,8 @@ static void initialize_graphics(BacaTuiState *state) {
   state->image_mode = baca_graphics_select_mode(
       state->app->config.image_mode, state->app->config.image_mode_explicit,
       &environment);
-  state->raw_truecolor =
-      baca_graphics_truecolor_available(&environment) &&
-      multiplexer == BACA_GRAPHICS_MULTIPLEXER_NONE;
+  state->raw_truecolor = baca_graphics_truecolor_available(&environment) &&
+                         multiplexer == BACA_GRAPHICS_MULTIPLEXER_NONE;
 
   int pair_capacity = state->colors ? COLOR_PAIRS - BACA_PAIR_IMAGE_FIRST : 0;
   if (pair_capacity > 256) {
@@ -3278,9 +3065,9 @@ static void initialize_graphics(BacaTuiState *state) {
   }
 
   BacaError ignored = {0};
-  state->graphics = baca_graphics_create(
-      BACA_GRAPHICS_DEFAULT_CACHE_BYTES, multiplexer,
-      current_background(state), &ignored);
+  state->graphics =
+      baca_graphics_create(BACA_GRAPHICS_DEFAULT_CACHE_BYTES, multiplexer,
+                           current_background(state), &ignored);
   if (state->graphics == NULL) {
     state->image_mode = BACA_IMAGE_MODE_PLACEHOLDER;
     state->presentation = state->app->document.format == BACA_FORMAT_PDF
@@ -3309,953 +3096,6 @@ static void initialize_graphics(BacaTuiState *state) {
   baca_document_probe_images(&state->app->document, true);
 }
 
-static size_t library_visible_rows(const BacaLibraryTuiState *state) {
-  return state->rows > 3 ? (size_t)(state->rows - 3) : 1U;
-}
-
-static void library_ensure_selection_visible(BacaLibraryTuiState *state) {
-  if (state->view.length == 0U) {
-    state->selected = 0U;
-    state->top = 0U;
-    return;
-  }
-  if (state->selected >= state->view.length) {
-    state->selected = state->view.length - 1U;
-  }
-  const size_t visible = library_visible_rows(state);
-  if (state->selected < state->top) {
-    state->top = state->selected;
-  } else if (state->selected >= state->top + visible) {
-    state->top = state->selected - visible + 1U;
-  }
-  const size_t maximum_top =
-      state->view.length > visible ? state->view.length - visible : 0U;
-  if (state->top > maximum_top) {
-    state->top = maximum_top;
-  }
-}
-
-static void library_update_dimensions(BacaLibraryTuiState *state) {
-  getmaxyx(stdscr, state->rows, state->columns);
-  if (state->rows < 1) {
-    state->rows = 1;
-  }
-  if (state->columns < 1) {
-    state->columns = 1;
-  }
-  library_ensure_selection_visible(state);
-  state->dirty = true;
-}
-
-static void library_clear_status(BacaLibraryTuiState *state) {
-  free(state->status);
-  state->status = NULL;
-}
-
-static void library_copy_status(BacaLibraryTuiState *state,
-                                const char *message) {
-  BacaError ignored = {0};
-  char *safe = baca_library_sanitize_text(message, SIZE_MAX, &ignored);
-  if (safe != NULL) {
-    library_clear_status(state);
-    state->status = safe;
-  }
-}
-
-static bool library_replace_view(BacaLibraryTuiState *state,
-                                 BacaLibraryShelfKind mode,
-                                 const char *author, size_t format_book,
-                                 const char *filter, BacaLibrarySort sort,
-                                 const char *selected_filepath,
-                                 BacaError *error) {
-  BacaLibraryShelf replacement_shelf = {0};
-  const BacaHistory *history = state->history;
-  if (state->catalog != NULL) {
-    if (!baca_library_shelf_build(&replacement_shelf, state->catalog, mode,
-                                  author, format_book, filter, error)) {
-      return false;
-    }
-    history = &replacement_shelf.entries;
-  }
-  const char *view_filter = state->catalog == NULL ? filter : "";
-  const BacaLibrarySort view_sort =
-      state->catalog != NULL && filter[0] != '\0'
-          ? BACA_LIBRARY_SORT_RELEVANCE
-          : sort;
-  BacaLibraryView replacement_view = {0};
-  if (!baca_library_view_build(&replacement_view, history, view_filter,
-                               view_sort, error)) {
-    baca_library_shelf_free(&replacement_shelf);
-    return false;
-  }
-  const size_t selected = baca_library_preserve_selection(
-      &replacement_view, selected_filepath, state->selected);
-  baca_library_view_free(&state->view);
-  baca_library_shelf_free(&state->shelf);
-  state->view = replacement_view;
-  state->shelf = replacement_shelf;
-  state->selected = selected;
-  if (filter != state->filter) {
-    (void)snprintf(state->filter, sizeof(state->filter), "%s", filter);
-  }
-  state->sort = sort;
-  library_ensure_selection_visible(state);
-  state->dirty = true;
-  return true;
-}
-
-static bool library_rebuild_view(BacaLibraryTuiState *state,
-                                 const char *filter, BacaLibrarySort sort,
-                                 const char *selected_filepath,
-                                 BacaError *error) {
-  return library_replace_view(state, state->mode, state->author,
-                              state->format_book, filter, sort,
-                              selected_filepath, error);
-}
-
-static const char *library_selected_filepath(
-    const BacaLibraryTuiState *state) {
-  if (state->selected >= state->view.length) {
-    return NULL;
-  }
-  return state->view.rows[state->selected].entry->filepath;
-}
-
-static const BacaLibraryShelfReference *library_selected_reference(
-    const BacaLibraryTuiState *state) {
-  if (state->catalog == NULL || state->selected >= state->view.length) {
-    return NULL;
-  }
-  return baca_library_shelf_reference(
-      &state->shelf, state->view.rows[state->selected].entry);
-}
-
-static void library_runtime_error(BacaLibraryTuiState *state,
-                                  const BacaError *error,
-                                  const char *fallback) {
-  library_copy_status(
-      state,
-      error != NULL && error->message[0] != '\0' ? error->message : fallback);
-  state->dirty = true;
-}
-
-static void library_move_selection(BacaLibraryTuiState *state, int amount) {
-  if (state->view.length == 0U) {
-    return;
-  }
-  if (amount < 0) {
-    const size_t distance = (size_t)(-(long)amount);
-    state->selected =
-        distance > state->selected ? 0U : state->selected - distance;
-  } else {
-    const size_t distance = (size_t)amount;
-    const size_t maximum = state->view.length - 1U;
-    state->selected = distance > maximum - state->selected
-                          ? maximum
-                          : state->selected + distance;
-  }
-  library_clear_status(state);
-  library_ensure_selection_visible(state);
-  state->dirty = true;
-}
-
-static int library_progress_percent(double progress) {
-  if (!isfinite(progress) || progress < 0.0) {
-    progress = 0.0;
-  } else if (progress > 1.0) {
-    progress = 1.0;
-  }
-  return (int)lround(progress * 100.0);
-}
-
-static void library_format_recency(const char *last_read, char output[16]) {
-  struct timespec parsed = {0};
-  if (!baca_library_parse_timestamp(last_read, &parsed)) {
-    (void)snprintf(output, 16U, "-");
-    return;
-  }
-  const time_t now = time(NULL);
-  if (now == (time_t)-1) {
-    (void)snprintf(output, 16U, "-");
-    return;
-  }
-  double elapsed = difftime(now, parsed.tv_sec);
-  if (elapsed < 0.0) {
-    elapsed = 0.0;
-  }
-  if (elapsed < 3600.0) {
-    (void)snprintf(output, 16U, "now");
-  } else if (elapsed < 86400.0) {
-    (void)snprintf(output, 16U, "%.0fh", floor(elapsed / 3600.0));
-  } else if (elapsed < 2592000.0) {
-    (void)snprintf(output, 16U, "%.0fd", floor(elapsed / 86400.0));
-  } else if (elapsed < 31536000.0) {
-    (void)snprintf(output, 16U, "%.0fmo", floor(elapsed / 2592000.0));
-  } else {
-    (void)snprintf(output, 16U, "%.0fy", floor(elapsed / 31536000.0));
-  }
-}
-
-static void library_draw_row(BacaLibraryTuiState *state, int screen_row,
-                             size_t view_index) {
-  if (view_index >= state->view.length || state->columns <= 0) {
-    return;
-  }
-  const BacaLibraryRow *row = &state->view.rows[view_index];
-  const int x = state->columns > 2 ? 1 : 0;
-  const int width = state->columns > 2 ? state->columns - 2 : state->columns;
-  if (width <= 0) {
-    return;
-  }
-
-  const bool selected = view_index == state->selected;
-  const attr_t selected_attributes =
-      selected ? (state->colors ? A_NORMAL : A_REVERSE) : A_NORMAL;
-  const short selected_pair =
-      selected && state->colors ? BACA_PAIR_SEARCH : BACA_PAIR_BASE;
-  (void)wattron(stdscr, selected_attributes |
-                            (state->colors ? COLOR_PAIR(selected_pair) : 0));
-  (void)mvwhline(stdscr, screen_row, x, ' ', width);
-
-  char progress[8] = {0};
-  char recency[16] = {0};
-  (void)snprintf(progress, sizeof(progress), "%d%%",
-                 library_progress_percent(row->entry->reading_progress));
-  library_format_recency(row->entry->last_read, recency);
-  const int progress_width = size_to_int(strlen(progress));
-  const int recency_width = size_to_int(strlen(recency));
-
-  if (width < progress_width + recency_width + 6) {
-    library_add_clipped(stdscr, screen_row, x, row->title, width);
-  } else {
-    const int recency_x = x + width - recency_width;
-    const int progress_x = recency_x - progress_width - 1;
-    const int text_width = progress_x - x - 1;
-    int author_width = text_width >= 6 ? text_width / 3 : 0;
-    if (author_width > 20) {
-      author_width = 20;
-    }
-    const int title_width =
-        text_width - author_width - (author_width > 0 ? 1 : 0);
-    library_add_clipped(stdscr, screen_row, x, row->title, title_width);
-    if (author_width > 0) {
-      library_add_clipped(stdscr, screen_row, x + title_width + 1,
-                          row->author, author_width);
-    }
-    library_add_clipped(stdscr, screen_row, progress_x, progress,
-                        progress_width);
-    library_add_clipped(stdscr, screen_row, recency_x, recency, recency_width);
-  }
-  (void)wattroff(stdscr, selected_attributes |
-                             (state->colors ? COLOR_PAIR(selected_pair) : 0));
-}
-
-static size_t library_sanitized_width(const char *text, size_t length) {
-  if (length >= sizeof(((BacaPromptState *)0)->value)) {
-    return 0U;
-  }
-  char segment[sizeof(((BacaPromptState *)0)->value)] = {0};
-  memcpy(segment, text, length);
-  BacaError ignored = {0};
-  char *safe = baca_library_sanitize_text(segment, SIZE_MAX, &ignored);
-  const size_t width =
-      safe == NULL ? 0U : baca_utf8_width(safe, strlen(safe));
-  free(safe);
-  return width;
-}
-
-static size_t library_input_visible_start(const BacaPromptState *input,
-                                           int columns) {
-  if (columns <= 0) {
-    return input->cursor;
-  }
-  size_t start = input->cursor;
-  size_t used = 0U;
-  while (start > 0U) {
-    const size_t previous = previous_utf8_boundary(input->value, start);
-    const size_t width =
-        library_sanitized_width(input->value + previous, start - previous);
-    if (width > (size_t)columns - minimum_size(used, (size_t)columns)) {
-      break;
-    }
-    used += width;
-    start = previous;
-  }
-  return start;
-}
-
-static void library_draw_context(BacaLibraryTuiState *state, int row) {
-  if (row < 0 || row >= state->rows || state->columns <= 0) {
-    return;
-  }
-  const int x = state->columns > 2 ? 1 : 0;
-  const int width = state->columns > 2 ? state->columns - 2 : state->columns;
-  (void)wattron(stdscr, A_DIM);
-  if (state->input_kind != BACA_LIBRARY_INPUT_NONE) {
-    const char *prefix =
-        state->input_kind == BACA_LIBRARY_INPUT_FILTER ? "/ " : "open ";
-    const int full_prefix_width = size_to_int(strlen(prefix));
-    const int prefix_width =
-        full_prefix_width < width ? full_prefix_width : width > 1 ? width - 1 : 0;
-    library_add_clipped(stdscr, row, x, prefix, prefix_width);
-    const int input_width = width - prefix_width;
-    const size_t start =
-        library_input_visible_start(&state->input, input_width);
-    library_add_clipped(stdscr, row, x + prefix_width,
-                        state->input.value + start, input_width);
-    int cursor_x = x + prefix_width +
-                   size_to_int(library_sanitized_width(
-                       state->input.value + start, state->input.cursor - start));
-    if (cursor_x >= state->columns) {
-      cursor_x = state->columns - 1;
-    }
-    if (cursor_x < 0) {
-      cursor_x = 0;
-    }
-    (void)move(row, cursor_x);
-  } else if (state->status != NULL && state->status[0] != '\0') {
-    library_add_clipped(stdscr, row, x, state->status, width);
-  } else {
-    char context[256] = {0};
-    if (state->catalog == NULL) {
-      if (state->view.length == 0U) {
-        (void)snprintf(context, sizeof(context), "%s - %s%s",
-                       state->filter[0] == '\0' ? "0 books" : "no matches",
-                       baca_library_sort_name(state->sort),
-                       state->filter[0] == '\0' ? "" : " - /");
-      } else if (state->filter[0] == '\0') {
-        (void)snprintf(context, sizeof(context), "%zu/%zu - %s",
-                       state->selected + 1U, state->view.length,
-                       baca_library_sort_name(state->sort));
-      } else {
-        (void)snprintf(context, sizeof(context), "%zu/%zu - %s - /",
-                       state->selected + 1U, state->view.length,
-                       baca_library_sort_name(state->sort));
-      }
-      library_add_clipped(stdscr, row, x, context, width);
-      if (state->filter[0] != '\0') {
-        const int context_width = size_to_int(strlen(context));
-        if (context_width < width) {
-          library_add_clipped(stdscr, row, x + context_width, state->filter,
-                              width - context_width);
-        }
-      }
-      (void)wattroff(stdscr, A_DIM);
-      return;
-    }
-    const char *scope = state->catalog == NULL
-                            ? "history"
-                            : state->mode == BACA_LIBRARY_SHELF_AUTHORS
-                                  ? "authors"
-                                  : state->mode == BACA_LIBRARY_SHELF_BOOKS
-                                        ? "books"
-                                        : state->mode == BACA_LIBRARY_SHELF_FORMATS
-                                              ? "formats"
-                                              : "all books";
-    if (state->view.length == 0U) {
-      (void)snprintf(context, sizeof(context), "%s | %s | %s%s",
-                     state->filter[0] == '\0' ? "0 books" : "no matches",
-                     scope,
-                     baca_library_sort_name(state->sort),
-                     state->filter[0] == '\0' ? "" : " - /");
-    } else if (state->filter[0] == '\0') {
-      (void)snprintf(context, sizeof(context), "%zu/%zu | %s | %s",
-                     state->selected + 1U, state->view.length,
-                     scope,
-                     baca_library_sort_name(state->sort));
-    } else {
-      (void)snprintf(context, sizeof(context), "%zu/%zu | %s | relevance | /",
-                     state->selected + 1U, state->view.length,
-                     scope);
-    }
-    library_add_clipped(stdscr, row, x, context, width);
-    if (state->filter[0] != '\0') {
-      const int context_width = size_to_int(strlen(context));
-      if (context_width < width) {
-        library_add_clipped(stdscr, row, x + context_width, state->filter,
-                            width - context_width);
-      }
-    }
-  }
-  (void)wattroff(stdscr, A_DIM);
-}
-
-static void library_draw_frame(BacaLibraryTuiState *state) {
-  (void)werase(stdscr);
-  (void)wbkgd(stdscr,
-              state->colors ? (chtype)COLOR_PAIR(BACA_PAIR_BASE) : A_NORMAL);
-  const bool compact_input =
-      state->rows == 2 && state->input_kind != BACA_LIBRARY_INPUT_NONE;
-  const bool input_active = state->input_kind != BACA_LIBRARY_INPUT_NONE;
-  const bool show_heading = state->rows >= 2 && !compact_input;
-  const bool show_separator = state->rows >= 4;
-  const int content_row = show_separator ? 2 : show_heading ? 1 : 0;
-  const int footer_row =
-      input_active || state->rows >= 3 ? state->rows - 1 : -1;
-  const int content_end = footer_row >= 0 ? footer_row : state->rows;
-  if (show_heading) {
-    char heading[512] = "baca / history";
-    if (state->catalog != NULL) {
-      if (state->mode == BACA_LIBRARY_SHELF_AUTHORS) {
-        (void)snprintf(heading, sizeof(heading), "baca / authors");
-      } else if (state->mode == BACA_LIBRARY_SHELF_ALL) {
-        (void)snprintf(heading, sizeof(heading), "baca / all books");
-      } else if (state->mode == BACA_LIBRARY_SHELF_BOOKS) {
-        (void)snprintf(heading, sizeof(heading), "baca / authors / %s",
-                       state->author == NULL ? "unknown" : state->author);
-      } else if (state->format_book < state->catalog->length) {
-        (void)snprintf(heading, sizeof(heading), "baca / formats / %s",
-                       state->catalog->books[state->format_book].title);
-      }
-    }
-    (void)wattron(stdscr,
-                  A_BOLD |
-                      (state->colors ? COLOR_PAIR(BACA_PAIR_ACCENT) : 0));
-    library_add_clipped(stdscr, 0, state->columns > 2 ? 1 : 0, heading,
-                        state->columns > 2 ? state->columns - 2
-                                           : state->columns);
-    (void)wattroff(stdscr,
-                   A_BOLD |
-                       (state->colors ? COLOR_PAIR(BACA_PAIR_ACCENT) : 0));
-  }
-  if (show_separator) {
-    (void)wattron(stdscr, A_DIM);
-    (void)mvwhline(stdscr, 1, 0, ACS_HLINE, state->columns);
-    (void)wattroff(stdscr, A_DIM);
-  }
-  if (state->view.length == 0U && content_row < content_end) {
-    const char *message =
-        state->filter[0] == '\0' ? "No books yet" : "No matching books";
-    library_add_clipped(stdscr, content_row,
-                        state->columns > 2 ? 1 : 0, message,
-                        state->columns > 2 ? state->columns - 2
-                                           : state->columns);
-  } else {
-    const size_t visible = library_visible_rows(state);
-    for (size_t offset = 0U; offset < visible; ++offset) {
-      const size_t index = state->top + offset;
-      if (index >= state->view.length ||
-          offset > (size_t)(INT_MAX - content_row) ||
-          content_row + (int)offset >= content_end) {
-        break;
-      }
-      library_draw_row(state, content_row + (int)offset, index);
-    }
-  }
-  library_draw_context(state, footer_row);
-  if (state->input_kind != BACA_LIBRARY_INPUT_NONE) {
-    if (state->previous_cursor != ERR) {
-      (void)curs_set(1);
-    }
-  } else {
-    (void)curs_set(0);
-  }
-  (void)refresh();
-  state->dirty = false;
-}
-
-static bool library_initialize_curses(BacaLibraryTuiState *state,
-                                      BacaError *error) {
-  if (initscr() == NULL) {
-    baca_error_set(error, BACA_ERROR_EXTERNAL, "cannot initialize terminal");
-    return false;
-  }
-  (void)cbreak();
-  (void)noecho();
-  (void)keypad(stdscr, true);
-  define_extended_keys();
-  (void)set_escdelay(25);
-  state->previous_cursor = curs_set(0);
-  state->colors = false;
-  if (has_colors() == true && start_color() == OK && COLORS >= 8 &&
-      COLOR_PAIRS > BACA_PAIR_SEARCH) {
-    const BacaColorScheme *theme = &state->config->dark;
-    (void)use_default_colors();
-    if (init_pair(BACA_PAIR_BASE, terminal_color(theme->foreground),
-                  terminal_color(theme->background)) != ERR &&
-        init_pair(BACA_PAIR_ACCENT, terminal_color(theme->accent),
-                  terminal_color(theme->background)) != ERR &&
-        init_pair(BACA_PAIR_SEARCH, terminal_color(theme->background),
-                  terminal_color(theme->accent)) != ERR) {
-      state->colors = true;
-    }
-  }
-  library_update_dimensions(state);
-  (void)wbkgd(stdscr,
-              state->colors ? (chtype)COLOR_PAIR(BACA_PAIR_BASE) : A_NORMAL);
-  return true;
-}
-
-static void library_begin_filter(BacaLibraryTuiState *state) {
-  BacaError error = {0};
-  free(state->input_selection);
-  state->input_selection = NULL;
-  const char *selected = library_selected_filepath(state);
-  if (selected != NULL) {
-    state->input_selection = baca_strdup(selected, &error);
-    if (state->input_selection == NULL) {
-      library_runtime_error(state, &error, "cannot start filter");
-      return;
-    }
-  }
-  (void)snprintf(state->filter_before, sizeof(state->filter_before), "%s",
-                 state->filter);
-  memset(&state->input, 0, sizeof(state->input));
-  (void)snprintf(state->input.value, sizeof(state->input.value), "%s",
-                 state->filter);
-  state->input.length = strlen(state->input.value);
-  state->input.cursor = state->input.length;
-  state->input_kind = BACA_LIBRARY_INPUT_FILTER;
-  library_clear_status(state);
-  state->dirty = true;
-}
-
-static void library_begin_path(BacaLibraryTuiState *state) {
-  memset(&state->input, 0, sizeof(state->input));
-  state->input_kind = BACA_LIBRARY_INPUT_PATH;
-  library_clear_status(state);
-  state->dirty = true;
-}
-
-static void library_finish_input(BacaLibraryTuiState *state) {
-  state->input_kind = BACA_LIBRARY_INPUT_NONE;
-  memset(&state->input, 0, sizeof(state->input));
-  free(state->input_selection);
-  state->input_selection = NULL;
-  state->dirty = true;
-}
-
-static bool library_update_filter(BacaLibraryTuiState *state) {
-  BacaError error = {0};
-  if (!library_rebuild_view(state, state->input.value, state->sort,
-                            state->input_selection, &error)) {
-    library_runtime_error(state, &error, "cannot filter library");
-    return false;
-  }
-  library_clear_status(state);
-  return true;
-}
-
-static void library_cancel_input(BacaLibraryTuiState *state) {
-  if (state->input_kind == BACA_LIBRARY_INPUT_FILTER &&
-      strcmp(state->filter, state->filter_before) != 0) {
-    BacaError error = {0};
-    if (!library_rebuild_view(state, state->filter_before, state->sort,
-                              state->input_selection, &error)) {
-      library_runtime_error(state, &error, "cannot restore filter");
-      return;
-    }
-  }
-  library_clear_status(state);
-  library_finish_input(state);
-}
-
-static void library_emit(BacaLibraryTuiState *state,
-                         BacaLibraryCommand command, const char *path) {
-  char *stored_path = NULL;
-  if (path != NULL) {
-    BacaError error = {0};
-    stored_path = baca_strdup(path, &error);
-    if (stored_path == NULL) {
-      library_runtime_error(state, &error, "cannot select book");
-      return;
-    }
-  }
-  free(state->action.path);
-  state->action = (BacaLibraryAction){
-      .command = command,
-      .path = stored_path,
-      .sort = state->sort,
-  };
-  state->quit = true;
-}
-
-static bool library_key_is_enter(bool key_code, int code,
-                                 wchar_t character) {
-  return (key_code && code == KEY_ENTER) ||
-         (!key_code && (character == L'\n' || character == L'\r'));
-}
-
-static void library_handle_input_key(BacaLibraryTuiState *state,
-                                     bool key_code, int code,
-                                     wchar_t character) {
-  if (!key_code && character == 27) {
-    library_cancel_input(state);
-    return;
-  }
-  if (library_key_is_enter(key_code, code, character)) {
-    if (state->input_kind == BACA_LIBRARY_INPUT_PATH &&
-        state->input.length > 0U) {
-      library_emit(state, BACA_LIBRARY_COMMAND_OPEN, state->input.value);
-    } else if (state->input_kind == BACA_LIBRARY_INPUT_FILTER &&
-               strcmp(state->filter, state->input.value) != 0 &&
-               !library_update_filter(state)) {
-      return;
-    } else {
-      library_finish_input(state);
-    }
-    return;
-  }
-
-  bool changed = false;
-  if ((key_code && code == KEY_BACKSPACE) ||
-      (!key_code && (character == 8 || character == 127))) {
-    const size_t start =
-        previous_utf8_boundary(state->input.value, state->input.cursor);
-    changed = start != state->input.cursor;
-    prompt_delete_range(&state->input, start, state->input.cursor);
-  } else if (key_code && code == KEY_DC) {
-    const size_t end = next_utf8_boundary(
-        state->input.value, state->input.length, state->input.cursor);
-    changed = end != state->input.cursor;
-    prompt_delete_range(&state->input, state->input.cursor, end);
-  } else if (key_code && code == KEY_LEFT) {
-    state->input.cursor =
-        previous_utf8_boundary(state->input.value, state->input.cursor);
-  } else if (key_code && code == KEY_RIGHT) {
-    state->input.cursor = next_utf8_boundary(
-        state->input.value, state->input.length, state->input.cursor);
-  } else if ((key_code && code == KEY_HOME) ||
-             (!key_code && character == 1)) {
-    state->input.cursor = 0U;
-  } else if ((key_code && code == KEY_END) ||
-             (!key_code && character == 5)) {
-    state->input.cursor = state->input.length;
-  } else if (!key_code && character == 23) {
-    size_t start = state->input.cursor;
-    while (start > 0U &&
-           isspace((unsigned char)state->input.value[start - 1U]) != 0) {
-      --start;
-    }
-    while (start > 0U &&
-           isspace((unsigned char)state->input.value[start - 1U]) == 0) {
-      --start;
-    }
-    changed = start != state->input.cursor;
-    prompt_delete_range(&state->input, start, state->input.cursor);
-  } else if (!key_code && iswprint((wint_t)character) != 0) {
-    const size_t before = state->input.length;
-    prompt_insert(&state->input, character);
-    changed = state->input.length != before;
-  }
-  if (changed && state->input_kind == BACA_LIBRARY_INPUT_FILTER) {
-    (void)library_update_filter(state);
-  }
-  state->dirty = true;
-}
-
-static void library_cycle_sort(BacaLibraryTuiState *state) {
-  const char *selected = library_selected_filepath(state);
-  const BacaLibrarySort sort = baca_library_sort_next(state->sort);
-  BacaError error = {0};
-  if (!library_rebuild_view(state, state->filter, sort, selected, &error)) {
-    library_runtime_error(state, &error, "cannot sort library");
-  } else {
-    library_clear_status(state);
-  }
-}
-
-static void library_clear_filter(BacaLibraryTuiState *state) {
-  if (state->filter[0] == '\0') {
-    return;
-  }
-  const char *selected = library_selected_filepath(state);
-  BacaError error = {0};
-  if (!library_rebuild_view(state, "", state->sort, selected, &error)) {
-    library_runtime_error(state, &error, "cannot clear filter");
-  } else {
-    library_clear_status(state);
-  }
-}
-
-static void library_change_mode(BacaLibraryTuiState *state,
-                                BacaLibraryShelfKind mode,
-                                const char *author,
-                                size_t format_book) {
-  char *stored_author = NULL;
-  BacaError error = {0};
-  if (author != NULL) {
-    stored_author = baca_strdup(author, &error);
-    if (stored_author == NULL) {
-      library_runtime_error(state, &error, "cannot open shelf");
-      return;
-    }
-  }
-  if (!library_replace_view(state, mode, stored_author, format_book, "",
-                            state->sort, NULL, &error)) {
-    free(stored_author);
-    library_runtime_error(state, &error, "cannot open shelf");
-  } else {
-    free(state->author);
-    state->author = stored_author;
-    state->mode = mode;
-    state->format_book = format_book;
-    state->selected = 0U;
-    state->top = 0U;
-    state->filter[0] = '\0';
-    library_ensure_selection_visible(state);
-    library_clear_status(state);
-  }
-}
-
-static void library_open_selected(BacaLibraryTuiState *state) {
-  const BacaLibraryShelfReference *reference = library_selected_reference(state);
-  if (reference != NULL && state->mode == BACA_LIBRARY_SHELF_AUTHORS &&
-      reference->book_index < state->catalog->length) {
-    library_change_mode(state, BACA_LIBRARY_SHELF_BOOKS,
-                        state->catalog->books[reference->book_index].author,
-                        0U);
-    return;
-  }
-  const char *path = library_selected_filepath(state);
-  if (path == NULL || path[0] == '\0') {
-    library_copy_status(state, "book path unavailable");
-    state->dirty = true;
-  } else {
-    library_emit(state, BACA_LIBRARY_COMMAND_OPEN, path);
-  }
-}
-
-static void library_open_formats(BacaLibraryTuiState *state) {
-  const BacaLibraryShelfReference *reference = library_selected_reference(state);
-  if (reference == NULL || reference->book_index >= state->catalog->length ||
-      state->mode == BACA_LIBRARY_SHELF_AUTHORS) {
-    library_copy_status(state, "select a book to view formats");
-    state->dirty = true;
-    return;
-  }
-  library_change_mode(state, BACA_LIBRARY_SHELF_FORMATS, NULL,
-                      reference->book_index);
-}
-
-static void library_go_back(BacaLibraryTuiState *state) {
-  if (state->catalog == NULL) {
-    library_clear_filter(state);
-  } else if (state->filter[0] != '\0') {
-    library_clear_filter(state);
-  } else if (state->mode == BACA_LIBRARY_SHELF_FORMATS) {
-    const char *author = state->format_book < state->catalog->length
-                             ? state->catalog->books[state->format_book].author
-                             : NULL;
-    library_change_mode(state, state->catalog->calibre
-                                   ? BACA_LIBRARY_SHELF_BOOKS
-                                   : BACA_LIBRARY_SHELF_ALL,
-                        state->catalog->calibre ? author : NULL, 0U);
-  } else if (state->mode == BACA_LIBRARY_SHELF_BOOKS) {
-    library_change_mode(state, BACA_LIBRARY_SHELF_AUTHORS, NULL, 0U);
-  } else {
-    library_clear_filter(state);
-  }
-}
-
-static void library_handle_key(BacaLibraryTuiState *state, bool key_code,
-                               int code, wchar_t character) {
-  if (state->input_kind != BACA_LIBRARY_INPUT_NONE) {
-    library_handle_input_key(state, key_code, code, character);
-    return;
-  }
-
-  if (!key_code && character == L'g') {
-    if (state->g_pending) {
-      state->selected = 0U;
-      state->g_pending = false;
-      library_ensure_selection_visible(state);
-      state->dirty = true;
-    } else {
-      state->g_pending = true;
-    }
-    return;
-  }
-  state->g_pending = false;
-
-  if ((key_code && code == KEY_DOWN) || (!key_code && character == L'j')) {
-    library_move_selection(state, 1);
-  } else if ((key_code && code == KEY_UP) ||
-             (!key_code && character == L'k')) {
-    library_move_selection(state, -1);
-  } else if (key_code && code == KEY_HOME) {
-    state->selected = 0U;
-    library_ensure_selection_visible(state);
-    state->dirty = true;
-  } else if ((key_code && code == KEY_END) ||
-             (!key_code && character == L'G')) {
-    if (state->view.length > 0U) {
-      state->selected = state->view.length - 1U;
-      library_ensure_selection_visible(state);
-      state->dirty = true;
-    }
-  } else if ((key_code && code == KEY_NPAGE) ||
-             (!key_code && character == 6)) {
-    library_move_selection(state, size_to_int(library_visible_rows(state)));
-  } else if ((key_code && code == KEY_PPAGE) ||
-             (!key_code && character == 2)) {
-    library_move_selection(state,
-                           -size_to_int(library_visible_rows(state)));
-  } else if (library_key_is_enter(key_code, code, character) ||
-             (!key_code && character == L'l')) {
-    library_open_selected(state);
-  } else if (!key_code && character == L'/') {
-    library_begin_filter(state);
-  } else if (!key_code && character == L's') {
-    library_cycle_sort(state);
-  } else if (!key_code && character == L'r') {
-    library_emit(state, BACA_LIBRARY_COMMAND_REFRESH,
-                 library_selected_filepath(state));
-  } else if (!key_code && character == L'o') {
-    library_begin_path(state);
-  } else if (!key_code && character == L'f' && state->catalog != NULL) {
-    library_open_formats(state);
-  } else if (!key_code && character == L'a' && state->catalog != NULL) {
-    library_change_mode(state,
-                        state->mode == BACA_LIBRARY_SHELF_ALL
-                            ? BACA_LIBRARY_SHELF_AUTHORS
-                            : BACA_LIBRARY_SHELF_ALL,
-                        NULL, 0U);
-  } else if ((key_code && code == KEY_BACKSPACE) ||
-             (!key_code && (character == 8 || character == 127 ||
-                            character == 27 || character == L'h'))) {
-    library_go_back(state);
-  } else if (!key_code && character == L'q') {
-    library_emit(state, BACA_LIBRARY_COMMAND_QUIT, NULL);
-  }
-}
-
-int baca_library_tui_run(const BacaConfig *config, const BacaHistory *history,
-                         BacaCatalog *catalog,
-                         BacaLibrarySort sort, const char *selected_filepath,
-                         const char *context, BacaLibraryAction *action,
-                         BacaError *error) {
-  if (config == NULL || history == NULL || action == NULL) {
-    baca_error_set(error, BACA_ERROR_ARGUMENT,
-                   "invalid library application state");
-    return EXIT_FAILURE;
-  }
-  if (action->command != BACA_LIBRARY_COMMAND_NONE || action->path != NULL) {
-    baca_error_set(error, BACA_ERROR_ARGUMENT,
-                   "library action output is not empty");
-    return EXIT_FAILURE;
-  }
-
-  BacaLibraryTuiState state = {
-      .config = config,
-      .history = history,
-      .catalog = catalog,
-      .mode = catalog != NULL && catalog->calibre
-                  ? BACA_LIBRARY_SHELF_AUTHORS
-                  : BACA_LIBRARY_SHELF_ALL,
-      .sort = sort,
-      .previous_cursor = ERR,
-      .dirty = true,
-  };
-  library_copy_status(&state, context);
-  if (!library_rebuild_view(&state, "", sort, selected_filepath, error)) {
-    library_clear_status(&state);
-    baca_library_shelf_free(&state.shelf);
-    return EXIT_FAILURE;
-  }
-
-  BacaSignalHandlers signal_handlers = {0};
-  sigset_t previous_signal_mask;
-  bool exit_signals_blocked = false;
-  if (!block_exit_signals(&previous_signal_mask, error)) {
-    library_clear_status(&state);
-    baca_library_view_free(&state.view);
-    baca_library_shelf_free(&state.shelf);
-    return EXIT_FAILURE;
-  }
-  exit_signals_blocked = true;
-  baca_exit_signal = 0;
-  if (!capture_signal_handlers(&signal_handlers, error)) {
-    library_clear_status(&state);
-    baca_library_view_free(&state.view);
-    baca_library_shelf_free(&state.shelf);
-    (void)restore_signal_mask(&previous_signal_mask, NULL);
-    return EXIT_FAILURE;
-  }
-  if (!library_initialize_curses(&state, error)) {
-    library_clear_status(&state);
-    baca_library_view_free(&state.view);
-    baca_library_shelf_free(&state.shelf);
-    (void)restore_signal_mask(&previous_signal_mask, NULL);
-    return EXIT_FAILURE;
-  }
-
-  int result = EXIT_SUCCESS;
-  if (!install_signal_handlers(&signal_handlers, error)) {
-    result = EXIT_FAILURE;
-    goto cleanup;
-  }
-  if (!restore_signal_mask(&previous_signal_mask, error)) {
-    result = EXIT_FAILURE;
-    goto cleanup;
-  }
-  exit_signals_blocked = false;
-  while (!state.quit) {
-    if (baca_exit_signal != 0) {
-      break;
-    }
-    if (state.dirty) {
-      library_draw_frame(&state);
-    }
-    wtimeout(stdscr, 100);
-    wint_t input = 0;
-    const int status = wget_wch(stdscr, &input);
-    if (baca_exit_signal != 0) {
-      break;
-    }
-    if (status == ERR) {
-      continue;
-    }
-    const bool key_code = status == KEY_CODE_YES;
-    const int code = key_code ? (int)input : 0;
-    const wchar_t character = key_code ? L'\0' : (wchar_t)input;
-    if (key_code && code == KEY_RESIZE) {
-      library_update_dimensions(&state);
-      continue;
-    }
-    library_handle_key(&state, key_code, code, character);
-  }
-
-cleanup:
-  if (state.previous_cursor != ERR) {
-    (void)curs_set(state.previous_cursor);
-  }
-  (void)endwin();
-  free(state.input_selection);
-  library_clear_status(&state);
-  baca_library_view_free(&state.view);
-  baca_library_shelf_free(&state.shelf);
-  free(state.author);
-  if (!exit_signals_blocked) {
-    BacaError mask_error = {0};
-    if (block_exit_signals(&previous_signal_mask, &mask_error)) {
-      exit_signals_blocked = true;
-    } else if (result == EXIT_SUCCESS) {
-      *error = mask_error;
-      result = EXIT_FAILURE;
-    }
-  }
-  const int signal_number = (int)baca_exit_signal;
-  restore_signal_handlers(&signal_handlers);
-  if (exit_signals_blocked) {
-    BacaError mask_error = {0};
-    if (!restore_signal_mask(&previous_signal_mask, &mask_error) &&
-        result == EXIT_SUCCESS) {
-      *error = mask_error;
-      result = EXIT_FAILURE;
-    }
-  }
-  if (result == EXIT_SUCCESS && signal_number != 0) {
-    result = 128 + signal_number;
-  }
-  if (result == EXIT_SUCCESS) {
-    *action = state.action;
-  } else {
-    free(state.action.path);
-  }
-  return result;
-}
-
 int baca_tui_run(BacaApp *app, BacaError *error) {
   if (app == NULL || app->document.path == NULL) {
     baca_error_set(error, BACA_ERROR_ARGUMENT,
@@ -4267,21 +3107,11 @@ int baca_tui_run(BacaApp *app, BacaError *error) {
       .previous_cursor = ERR,
       .dirty = true,
   };
-  BacaSignalHandlers signal_handlers = {0};
-  sigset_t previous_signal_mask;
-  bool exit_signals_blocked = false;
-  if (!block_exit_signals(&previous_signal_mask, error)) {
-    return EXIT_FAILURE;
-  }
-  exit_signals_blocked = true;
-  baca_exit_signal = 0;
-  if (!capture_signal_handlers(&signal_handlers, error)) {
-    (void)restore_signal_mask(&previous_signal_mask, NULL);
+  if (!baca_terminal_runtime_begin(error)) {
     return EXIT_FAILURE;
   }
   if (!initialize_curses(&state, error)) {
-    (void)restore_signal_mask(&previous_signal_mask, NULL);
-    return EXIT_FAILURE;
+    return baca_terminal_runtime_finish(EXIT_FAILURE, error);
   }
   initialize_graphics(&state);
 
@@ -4298,22 +3128,17 @@ int baca_tui_run(BacaApp *app, BacaError *error) {
     }
     state.pdf_render_failure_count = app->document.block_count;
   }
-  if (!install_signal_handlers(&signal_handlers, error)) {
+  if (!baca_terminal_runtime_activate(error)) {
     result = EXIT_FAILURE;
     goto cleanup;
   }
-  if (!restore_signal_mask(&previous_signal_mask, error)) {
-    result = EXIT_FAILURE;
-    goto cleanup;
-  }
-  exit_signals_blocked = false;
   if (!rebuild_layout(&state, error)) {
     result = EXIT_FAILURE;
     goto cleanup;
   }
 
   while (!state.quit) {
-    if (baca_exit_signal != 0) {
+    if (baca_terminal_runtime_interrupted()) {
       state.quit = true;
       continue;
     }
@@ -4325,7 +3150,7 @@ int baca_tui_run(BacaApp *app, BacaError *error) {
     wtimeout(stdscr, state.animation.active ? 16 : 100);
     wint_t input = 0;
     const int status = wget_wch(stdscr, &input);
-    if (baca_exit_signal != 0) {
+    if (baca_terminal_runtime_interrupted()) {
       state.quit = true;
       continue;
     }
@@ -4372,27 +3197,5 @@ cleanup:
     (void)curs_set(state.previous_cursor);
   }
   (void)endwin();
-  if (!exit_signals_blocked) {
-    BacaError mask_error = {0};
-    if (block_exit_signals(&previous_signal_mask, &mask_error)) {
-      exit_signals_blocked = true;
-    } else if (result == EXIT_SUCCESS) {
-      *error = mask_error;
-      result = EXIT_FAILURE;
-    }
-  }
-  const int signal_number = (int)baca_exit_signal;
-  restore_signal_handlers(&signal_handlers);
-  if (exit_signals_blocked) {
-    BacaError mask_error = {0};
-    if (!restore_signal_mask(&previous_signal_mask, &mask_error) &&
-        result == EXIT_SUCCESS) {
-      *error = mask_error;
-      result = EXIT_FAILURE;
-    }
-  }
-  if (result == EXIT_SUCCESS && signal_number != 0) {
-    result = 128 + signal_number;
-  }
-  return result;
+  return baca_terminal_runtime_finish(result, error);
 }

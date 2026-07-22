@@ -45,7 +45,7 @@ static BacaTestResult test_defaults(void) {
     TEST_ASSERT_INT(config.image_mode, BACA_IMAGE_MODE_AUTO);
     TEST_ASSERT(!config.image_mode_explicit);
     TEST_ASSERT(config.show_image_as_ansi);
-    TEST_ASSERT_INT((int)config.dark.background, 0x1e1e2e);
+    TEST_ASSERT_INT((int)config.dark.background, 0x1d1c2b);
     TEST_ASSERT_INT((int)config.dark.foreground, 0xcdd6f4);
     TEST_ASSERT_INT((int)config.dark.accent, 0xcba6f7);
     TEST_ASSERT_INT((int)config.light.foreground, 0x4c4f69);
@@ -60,6 +60,9 @@ static BacaTestResult test_defaults(void) {
     TEST_ASSERT_STR(config.keymaps.add_bookmark.items[0], "b");
     TEST_ASSERT_SIZE(config.keymaps.open_bookmarks.length, 1U);
     TEST_ASSERT_STR(config.keymaps.open_bookmarks.items[0], "B");
+    TEST_ASSERT_SIZE(config.keymaps.open_help.length, 2U);
+    TEST_ASSERT_STR(config.keymaps.open_help.items[0], "question_mark");
+    TEST_ASSERT_STR(config.keymaps.search_backward.items[0], "f2");
     TEST_ASSERT_INT(baca_config_content_width(&config, 120), 80);
     baca_config_free(&config);
     return BACA_TEST_PASS;
@@ -235,7 +238,40 @@ static BacaTestResult test_default_file_creation_is_isolated(void) {
     TEST_ASSERT(strstr(baca_config_default_text(), "TogglePdfView = v") != NULL);
     TEST_ASSERT(strstr(baca_config_default_text(), "AddBookmark = b") != NULL);
     TEST_ASSERT(strstr(baca_config_default_text(), "OpenBookmarks = B") != NULL);
+    TEST_ASSERT(strstr(baca_config_default_text(), "OpenHelp = question_mark,f1") != NULL);
     baca_config_free(&config);
+    free(path);
+    return BACA_TEST_PASS;
+}
+
+static BacaTestResult test_save_library_path_preserves_config(void) {
+    static const char text[] =
+        "[General]\n"
+        "Pretty = yes\n"
+        "MaxTextWidth = 73\n"
+        "[Color Dark]\n"
+        "Accent = #abcdef\n"
+        "[General]\n"
+        "LibraryPath = auto\n";
+    TEST_ASSERT(baca_test_write_text("xdg-config/baca/config.ini", text));
+    BacaError error = {0};
+    TEST_ASSERT(baca_config_save_library_path("/srv/100% books", &error));
+
+    BacaConfig config = {0};
+    TEST_ASSERT(baca_config_load(&config, &error));
+    TEST_ASSERT_STR(config.library_path, "/srv/100% books");
+    TEST_ASSERT(config.pretty);
+    TEST_ASSERT_INT(config.max_text_width, 73);
+    TEST_ASSERT_INT((int)config.dark.accent, 0xabcdef);
+    baca_config_free(&config);
+
+    char *path = baca_test_path("xdg-config/baca/config.ini");
+    TEST_ASSERT(path != NULL);
+    struct stat status;
+    TEST_ASSERT(stat(path, &status) == 0);
+    TEST_ASSERT((status.st_mode & 0777U) == 0600U);
+    TEST_ASSERT(!baca_config_save_library_path("bad\npath", &error));
+    TEST_ASSERT(!baca_config_save_library_path("/srv/trailing ", &error));
     free(path);
     return BACA_TEST_PASS;
 }
@@ -250,6 +286,7 @@ const BacaTestCase *baca_config_test_cases(size_t *count) {
         {.name = "key_lists", .function = test_key_lists},
         {.name = "image_modes_and_legacy_precedence", .function = test_image_modes_and_legacy_precedence},
         {.name = "default_file_creation_is_isolated", .function = test_default_file_creation_is_isolated},
+        {.name = "save_library_path_preserves_config", .function = test_save_library_path_preserves_config},
     };
     *count = BACA_ARRAY_LEN(cases);
     return cases;

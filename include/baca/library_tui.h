@@ -9,6 +9,7 @@ typedef enum BacaLibraryCommand : uint8_t {
     BACA_LIBRARY_COMMAND_QUIT,
     BACA_LIBRARY_COMMAND_OPEN,
     BACA_LIBRARY_COMMAND_REFRESH,
+    BACA_LIBRARY_COMMAND_SET_ROOT,
 } BacaLibraryCommand;
 
 typedef struct BacaLibraryAction {
@@ -18,5 +19,5 @@ typedef struct BacaLibraryAction {
 } BacaLibraryAction;
 
 [[nodiscard]] int baca_library_tui_run(const BacaConfig *config, const BacaHistory *history, BacaCatalog *catalog,
-                                        BacaLibrarySort sort, const char *selected_filepath, const char *context,
-                                        BacaLibraryAction *action, BacaError *error);
+                                        bool setup_required, BacaLibrarySort sort, const char *selected_filepath,
+                                        const char *context, BacaLibraryAction *action, BacaError *error);
