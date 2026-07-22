@@ -1495,7 +1495,7 @@ static bool run_pty_calibre_navigation(void) {
         static const char backspace = 127;
         success = library_pty_send(&process, &backspace, 1U) && library_pty_settle(&process) &&
                   library_pty_screen_line_matches(&process, 14U, 80U, "baca / authors / Alice Writer", NULL) &&
-                  library_pty_send_text(&process, "\n") &&
+                  library_pty_send_text(&process, "l") &&
                   library_pty_wait_for(&process, "CALIBRE EPUB BODY");
     }
     if (success) {

@@ -368,14 +368,16 @@ cleanup:
   return result;
 }
 
-static int run_library_reader(const char *path, char context[512]) {
+static int run_library_reader(const char *path, char context[512], bool *opened) {
+  if (opened != NULL) {
+    *opened = false;
+  }
   BacaApp app = {0};
   BacaError error = {0};
   if (!baca_app_init(&app, path, false, &error)) {
     (void)snprintf(context, 512U, "cannot open: %.490s", error.message);
     return EXIT_SUCCESS;
   }
-
   const int result = baca_app_run(&app, &error);
   BacaError save_error = {0};
   const bool saved = baca_app_free(&app, &save_error);
@@ -395,7 +397,25 @@ static int run_library_reader(const char *path, char context[512]) {
   } else {
     context[0] = '\0';
   }
+  if (opened != NULL && result == EXIT_SUCCESS) {
+    *opened = true;
+  }
   return EXIT_SUCCESS;
+}
+
+static bool apply_library_format_preferences(BacaDatabase *database,
+                                             BacaCatalog *catalog,
+                                             const char *library_root,
+                                             BacaError *error) {
+  BacaFormatPreferences preferences = {0};
+  if (!baca_database_format_preferences(database, library_root, &preferences,
+                                        error)) {
+    return false;
+  }
+  const bool applied =
+      baca_catalog_apply_format_preferences(catalog, &preferences, error);
+  baca_format_preferences_free(&preferences);
+  return applied;
 }
 
 static bool resolve_library_selection(const BacaHistory *history,
@@ -425,6 +445,15 @@ static bool resolve_library_selection(const BacaHistory *history,
 static bool library_directory(const char *path) {
   struct stat status;
   return path != NULL && stat(path, &status) == 0 && S_ISDIR(status.st_mode);
+}
+
+static bool library_contains_path(const char *root, const char *path) {
+  if (root == NULL || path == NULL) {
+    return false;
+  }
+  const size_t root_length = strlen(root);
+  return strncmp(root, path, root_length) == 0 &&
+         (path[root_length] == '\0' || path[root_length] == '/');
 }
 
 static char *resolve_library_root(const BacaConfig *config, BacaError *error) {
@@ -500,10 +529,15 @@ static int run_library(void) {
     remove_missing = false;
 
     if (library_root != NULL) {
-      const bool catalog_ready =
-          !baca_catalog_is_open(&catalog)
-              ? baca_catalog_open(&catalog, library_root, &history, true, &error)
-              : baca_catalog_update_progress(&catalog, &history, &error);
+      bool catalog_ready = false;
+      if (!baca_catalog_is_open(&catalog)) {
+        catalog_ready =
+            baca_catalog_open(&catalog, library_root, &history, true, &error) &&
+            apply_library_format_preferences(&database, &catalog, library_root,
+                                             &error);
+      } else {
+        catalog_ready = baca_catalog_update_progress(&catalog, &history, &error);
+      }
       if (!catalog_ready) {
         baca_history_free(&history);
         result = report_error(&error);
@@ -542,7 +576,9 @@ static int run_library(void) {
     if (result == EXIT_SUCCESS &&
         action.command == BACA_LIBRARY_COMMAND_REFRESH &&
         baca_catalog_is_open(&catalog) &&
-        !baca_catalog_refresh(&catalog, &history, &error)) {
+        (!baca_catalog_refresh(&catalog, &history, &error) ||
+         !apply_library_format_preferences(&database, &catalog, library_root,
+                                           &error))) {
       free(action.path);
       baca_history_free(&history);
       result = report_error(&error);
@@ -585,7 +621,7 @@ static int run_library(void) {
     if (baca_remote_is_url(requested_path)) {
       free(selected_filepath);
       selected_filepath = requested_path;
-      result = run_library_reader(requested_path, context);
+      result = run_library_reader(requested_path, context, NULL);
       if (result != EXIT_SUCCESS) {
         break;
       }
@@ -600,10 +636,32 @@ static int run_library(void) {
                      path_error.message);
       continue;
     }
+    if (baca_catalog_is_open(&catalog) &&
+        !library_contains_path(library_root, resolved_path)) {
+      free(resolved_path);
+      free(selected_filepath);
+      selected_filepath = requested_path;
+      (void)snprintf(context, sizeof(context),
+                     "cannot open: selected path leaves the library root");
+      continue;
+    }
     free(requested_path);
     free(selected_filepath);
     selected_filepath = resolved_path;
-    result = run_library_reader(resolved_path, context);
+    bool opened = false;
+    result = run_library_reader(resolved_path, context, &opened);
+    if (opened && baca_catalog_is_open(&catalog)) {
+      const char *book_key = NULL;
+      const char *format_relative_path = NULL;
+      if (baca_catalog_prefer_path(&catalog, resolved_path, &book_key,
+                                   &format_relative_path) &&
+          !baca_database_save_format_preference(
+              &database, library_root, book_key, format_relative_path, &error)) {
+        (void)snprintf(context, sizeof(context),
+                       "format preference not saved: %.478s", error.message);
+        baca_error_clear(&error);
+      }
+    }
     if (result != EXIT_SUCCESS) {
       break;
     }

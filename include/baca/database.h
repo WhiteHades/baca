@@ -35,6 +35,17 @@ typedef struct BacaBookmarks {
     size_t capacity;
 } BacaBookmarks;
 
+typedef struct BacaFormatPreference {
+    char *book_key;
+    char *relative_path;
+} BacaFormatPreference;
+
+typedef struct BacaFormatPreferences {
+    BacaFormatPreference *items;
+    size_t length;
+    size_t capacity;
+} BacaFormatPreferences;
+
 [[nodiscard]] bool baca_database_open(BacaDatabase *database, const char *path, BacaError *error);
 [[nodiscard]] bool baca_database_open_default(BacaDatabase *database, BacaError *error);
 void baca_database_close(BacaDatabase *database);
@@ -54,3 +65,9 @@ void baca_history_free(BacaHistory *history);
 [[nodiscard]] bool baca_database_remove_bookmark(BacaDatabase *database, const char *filepath, int64_t id,
                                                  BacaError *error);
 void baca_bookmarks_free(BacaBookmarks *bookmarks);
+[[nodiscard]] bool baca_database_format_preferences(BacaDatabase *database, const char *library_root,
+                                                    BacaFormatPreferences *preferences, BacaError *error);
+[[nodiscard]] bool baca_database_save_format_preference(BacaDatabase *database, const char *library_root,
+                                                        const char *book_key, const char *relative_path,
+                                                        BacaError *error);
+void baca_format_preferences_free(BacaFormatPreferences *preferences);

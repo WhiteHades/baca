@@ -147,12 +147,21 @@ bool baca_database_migrate(BacaDatabase *database, BacaError *error) {
         "\"reading_progress\" REAL NOT NULL CHECK(\"reading_progress\" >= 0.0 AND \"reading_progress\" <= 1.0), "
         "\"created_at\" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
         "UNIQUE(\"filepath\", \"reading_progress\"))";
+    static const char format_preferences_sql[] =
+        "CREATE TABLE IF NOT EXISTS \"library_format_preferences\" ("
+        "\"library_root\" TEXT NOT NULL, "
+        "\"book_key\" TEXT NOT NULL, "
+        "\"relative_path\" TEXT NOT NULL, "
+        "PRIMARY KEY (\"library_root\", \"book_key\"))";
     static const char migration_zero_sql[] =
         "INSERT INTO \"metadata\" (\"version\", \"migrated_at\") "
         "VALUES (0, CURRENT_TIMESTAMP) ON CONFLICT(\"version\") DO NOTHING";
     static const char migration_one_sql[] =
         "INSERT INTO \"metadata\" (\"version\", \"migrated_at\") "
         "VALUES (1, CURRENT_TIMESTAMP) ON CONFLICT(\"version\") DO NOTHING";
+    static const char migration_two_sql[] =
+        "INSERT INTO \"metadata\" (\"version\", \"migrated_at\") "
+        "VALUES (2, CURRENT_TIMESTAMP) ON CONFLICT(\"version\") DO NOTHING";
 
     if (!baca_database_exec(database, "BEGIN IMMEDIATE", "could not begin database migration", error)) {
         return false;
@@ -162,6 +171,8 @@ bool baca_database_migrate(BacaDatabase *database, BacaError *error) {
         !baca_database_exec(database, migration_zero_sql, "could not record database migration", error) ||
         !baca_database_exec(database, bookmarks_sql, "could not create bookmarks table", error) ||
         !baca_database_exec(database, migration_one_sql, "could not record bookmark migration", error) ||
+        !baca_database_exec(database, format_preferences_sql, "could not create format preferences table", error) ||
+        !baca_database_exec(database, migration_two_sql, "could not record format preference migration", error) ||
         !baca_database_exec(database, "COMMIT", "could not commit database migration", error)) {
         (void)sqlite3_exec(database->handle, "ROLLBACK", nullptr, nullptr, nullptr);
         return false;
@@ -499,6 +510,122 @@ bool baca_database_remove_history(BacaDatabase *database, const char *filepath, 
     status = sqlite3_finalize(statement);
     if (status != SQLITE_OK) {
         baca_database_set_error(database, "could not finish history removal", status, error);
+        return false;
+    }
+    return true;
+}
+
+void baca_format_preferences_free(BacaFormatPreferences *preferences) {
+    if (preferences == nullptr) {
+        return;
+    }
+    for (size_t index = 0U; index < preferences->length; ++index) {
+        free(preferences->items[index].book_key);
+        free(preferences->items[index].relative_path);
+    }
+    free(preferences->items);
+    *preferences = (BacaFormatPreferences){0};
+}
+
+bool baca_database_format_preferences(BacaDatabase *database, const char *library_root,
+                                      BacaFormatPreferences *preferences, BacaError *error) {
+    if (!baca_database_ready(database, error) || library_root == nullptr || library_root[0] == '\0' ||
+        preferences == nullptr || preferences->items != nullptr || preferences->length != 0U) {
+        if (!baca_error_is_set(error)) {
+            baca_error_set(error, BACA_ERROR_ARGUMENT, "invalid format preference query");
+        }
+        return false;
+    }
+
+    static const char sql[] = "SELECT \"book_key\", \"relative_path\" FROM "
+                              "\"library_format_preferences\" "
+                              "WHERE \"library_root\" = ?1 ORDER BY \"book_key\"";
+    sqlite3_stmt *statement = nullptr;
+    int status = sqlite3_prepare_v2(database->handle, sql, -1, &statement, nullptr);
+    if (status == SQLITE_OK) {
+        status = sqlite3_bind_text(statement, 1, library_root, -1, SQLITE_TRANSIENT);
+    }
+    if (status != SQLITE_OK) {
+        baca_database_set_error(database, "could not prepare format preference query", status, error);
+        (void)sqlite3_finalize(statement);
+        return false;
+    }
+
+    BacaFormatPreferences result = {0};
+    while ((status = sqlite3_step(statement)) == SQLITE_ROW) {
+        BacaFormatPreference item = {0};
+        if (!baca_database_column_string(statement, 0, true, &item.book_key, error) ||
+            !baca_database_column_string(statement, 1, true, &item.relative_path, error)) {
+            free(item.book_key);
+            free(item.relative_path);
+            baca_format_preferences_free(&result);
+            (void)sqlite3_finalize(statement);
+            return false;
+        }
+        BacaFormatPreference *items =
+            baca_array_reserve(result.items, &result.capacity, sizeof(*result.items), result.length + 1U, error);
+        if (items == nullptr) {
+            free(item.book_key);
+            free(item.relative_path);
+            baca_format_preferences_free(&result);
+            (void)sqlite3_finalize(statement);
+            return false;
+        }
+        result.items = items;
+        result.items[result.length++] = item;
+    }
+    if (status != SQLITE_DONE) {
+        baca_database_set_error(database, "could not read format preferences", status, error);
+        baca_format_preferences_free(&result);
+        (void)sqlite3_finalize(statement);
+        return false;
+    }
+    status = sqlite3_finalize(statement);
+    if (status != SQLITE_OK) {
+        baca_database_set_error(database, "could not finish format preference query", status, error);
+        baca_format_preferences_free(&result);
+        return false;
+    }
+    *preferences = result;
+    return true;
+}
+
+bool baca_database_save_format_preference(BacaDatabase *database, const char *library_root, const char *book_key,
+                                          const char *relative_path, BacaError *error) {
+    if (!baca_database_ready(database, error) || library_root == nullptr || library_root[0] == '\0' ||
+        book_key == nullptr || book_key[0] == '\0' || relative_path == nullptr || relative_path[0] == '\0') {
+        if (!baca_error_is_set(error)) {
+            baca_error_set(error, BACA_ERROR_ARGUMENT, "invalid format preference");
+        }
+        return false;
+    }
+    static const char sql[] = "INSERT INTO \"library_format_preferences\" "
+                              "(\"library_root\", \"book_key\", \"relative_path\") "
+                              "VALUES (?1, ?2, ?3) ON CONFLICT(\"library_root\", "
+                              "\"book_key\") DO UPDATE SET "
+                              "\"relative_path\" = excluded.\"relative_path\"";
+    sqlite3_stmt *statement = nullptr;
+    int status = sqlite3_prepare_v2(database->handle, sql, -1, &statement, nullptr);
+    if (status == SQLITE_OK) {
+        status = sqlite3_bind_text(statement, 1, library_root, -1, SQLITE_TRANSIENT);
+    }
+    if (status == SQLITE_OK) {
+        status = sqlite3_bind_text(statement, 2, book_key, -1, SQLITE_TRANSIENT);
+    }
+    if (status == SQLITE_OK) {
+        status = sqlite3_bind_text(statement, 3, relative_path, -1, SQLITE_TRANSIENT);
+    }
+    if (status == SQLITE_OK) {
+        status = sqlite3_step(statement);
+    }
+    if (status != SQLITE_DONE) {
+        baca_database_set_error(database, "could not save format preference", status, error);
+        (void)sqlite3_finalize(statement);
+        return false;
+    }
+    status = sqlite3_finalize(statement);
+    if (status != SQLITE_OK) {
+        baca_database_set_error(database, "could not finish format preference update", status, error);
         return false;
     }
     return true;

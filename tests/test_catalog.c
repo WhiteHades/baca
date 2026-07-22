@@ -3,6 +3,7 @@
 #include "baca/catalog.h"
 
 #include <stdlib.h>
+#include <unistd.h>
 
 static const BacaCatalogBook *catalog_find_book(const BacaCatalog *catalog, const char *title) {
     for (size_t index = 0U; index < catalog->length; ++index) {
@@ -85,11 +86,89 @@ static BacaTestResult test_flat_folder_groups_same_stem_only(void) {
     return BACA_TEST_PASS;
 }
 
+static BacaTestResult test_nested_hidden_folder_and_format_preference(void) {
+    TEST_ASSERT(baca_test_write_text("catalog-nested/.ignore", "skipped/\n"));
+    TEST_ASSERT(baca_test_write_text("catalog-nested/skipped/topic.pdf", "pdf"));
+    TEST_ASSERT(baca_test_write_text("catalog-nested/skipped/topic.epub", "epub"));
+    char *root = baca_test_path("catalog-nested");
+    TEST_ASSERT(root != NULL);
+    BacaCatalog catalog = {0};
+    BacaError error = {0};
+    TEST_ASSERT_MSG(baca_catalog_open(&catalog, root, NULL, false, &error), "%s", error.message);
+    TEST_ASSERT_SIZE(catalog.length, 1U);
+    const BacaCatalogBook *topic = catalog_find_book(&catalog, "topic");
+    TEST_ASSERT(topic != NULL);
+    TEST_ASSERT_SIZE(topic->format_count, 2U);
+    TEST_ASSERT_STR(topic->formats[0].name, "EPUB");
+    TEST_ASSERT_STR(topic->formats[1].name, "PDF");
+    TEST_ASSERT_STR(baca_catalog_preferred_format(topic)->name, "EPUB");
+
+    BacaFormatPreference item = {.book_key = topic->group_key,
+                                 .relative_path = "skipped/topic.pdf"};
+    BacaFormatPreferences preferences = {.items = &item, .length = 1U};
+    TEST_ASSERT_MSG(baca_catalog_apply_format_preferences(&catalog, &preferences, &error), "%s", error.message);
+    TEST_ASSERT_STR(baca_catalog_preferred_format(topic)->name, "PDF");
+
+    BacaCatalogMatches matches = {0};
+    TEST_ASSERT_MSG(baca_catalog_search(&catalog, "tpc", &matches, &error), "%s", error.message);
+    TEST_ASSERT_SIZE(matches.length, 1U);
+    TEST_ASSERT_STR(catalog.books[matches.book_indices[0]].title, "topic");
+    baca_catalog_matches_free(&matches);
+
+    item.relative_path = "skipped/topic.mobi";
+    TEST_ASSERT_MSG(baca_catalog_apply_format_preferences(&catalog, &preferences, &error), "%s", error.message);
+    TEST_ASSERT_STR(baca_catalog_preferred_format(topic)->name, "PDF");
+    baca_catalog_close(&catalog);
+    free(root);
+    return BACA_TEST_PASS;
+}
+
+static BacaTestResult test_symlink_escape_and_exact_duplicate_format_preference(void) {
+    TEST_ASSERT(baca_test_write_text("catalog-symlink/root/inside.epub", "inside"));
+    TEST_ASSERT(baca_test_write_text("catalog-symlink/outside/outside.epub", "outside"));
+    char *root = baca_test_path("catalog-symlink/root");
+    char *outside = baca_test_path("catalog-symlink/outside");
+    char *link = baca_test_path("catalog-symlink/root/escape");
+    TEST_ASSERT(root != NULL && outside != NULL && link != NULL);
+    TEST_ASSERT(symlink(outside, link) == 0);
+
+    BacaCatalog catalog = {0};
+    BacaError error = {0};
+    TEST_ASSERT_MSG(baca_catalog_open(&catalog, root, NULL, false, &error), "%s", error.message);
+    TEST_ASSERT_SIZE(catalog.length, 1U);
+    TEST_ASSERT_STR(catalog.books[0].title, "inside");
+    baca_catalog_close(&catalog);
+
+    TEST_ASSERT(baca_test_write_text("catalog-duplicate/topic.PDF", "upper"));
+    TEST_ASSERT(baca_test_write_text("catalog-duplicate/topic.pdf", "lower"));
+    char *duplicate_root = baca_test_path("catalog-duplicate");
+    TEST_ASSERT(duplicate_root != NULL);
+    TEST_ASSERT_MSG(baca_catalog_open(&catalog, duplicate_root, NULL, false, &error), "%s", error.message);
+    TEST_ASSERT_SIZE(catalog.length, 1U);
+    TEST_ASSERT_SIZE(catalog.books[0].format_count, 2U);
+    BacaFormatPreference item = {.book_key = catalog.books[0].group_key,
+                                 .relative_path = "topic.pdf"};
+    BacaFormatPreferences preferences = {.items = &item, .length = 1U};
+    TEST_ASSERT_MSG(baca_catalog_apply_format_preferences(&catalog, &preferences, &error), "%s", error.message);
+    TEST_ASSERT_STR(baca_catalog_preferred_format(&catalog.books[0])->relative_path, "topic.pdf");
+    baca_catalog_close(&catalog);
+
+    free(duplicate_root);
+    free(link);
+    free(outside);
+    free(root);
+    return BACA_TEST_PASS;
+}
+
 const BacaTestCase *baca_catalog_test_cases(size_t *count) {
     static const BacaTestCase cases[] = {
         {.name = "calibre_hierarchy_formats_search_and_progress",
          .function = test_calibre_hierarchy_formats_search_and_progress},
         {.name = "flat_folder_groups_same_stem_only", .function = test_flat_folder_groups_same_stem_only},
+        {.name = "nested_hidden_folder_and_format_preference",
+         .function = test_nested_hidden_folder_and_format_preference},
+        {.name = "symlink_escape_and_exact_duplicate_format_preference",
+         .function = test_symlink_escape_and_exact_duplicate_format_preference},
     };
     *count = BACA_ARRAY_LEN(cases);
     return cases;

@@ -45,3 +45,7 @@ void baca_catalog_close(BacaCatalog *catalog);
                                        BacaError *error);
 void baca_catalog_matches_free(BacaCatalogMatches *matches);
 [[nodiscard]] const BacaCatalogFormat *baca_catalog_preferred_format(const BacaCatalogBook *book);
+[[nodiscard]] bool baca_catalog_apply_format_preferences(BacaCatalog *catalog,
+                                                         const BacaFormatPreferences *preferences, BacaError *error);
+[[nodiscard]] bool baca_catalog_prefer_path(BacaCatalog *catalog, const char *path, const char **book_key,
+                                            const char **relative_path);

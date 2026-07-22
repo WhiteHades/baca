@@ -1,12 +1,16 @@
 #include "baca/catalog.h"
 
 #include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #define BACA_CATALOG_PAGE_SIZE 4096U
+#define BACA_CATALOG_MAX_DEPTH 256U
 
 typedef struct CatalogMapSlot {
     const char *key;
@@ -16,6 +20,7 @@ typedef struct CatalogMapSlot {
 typedef struct CatalogMap {
     CatalogMapSlot *slots;
     size_t capacity;
+    size_t length;
 } CatalogMap;
 
 static uint64_t catalog_hash(const char *value) {
@@ -63,9 +68,39 @@ static bool catalog_map_lookup(const CatalogMap *map, const char *key, size_t *v
     return false;
 }
 
+static bool catalog_map_grow(CatalogMap *map, BacaError *error) {
+    if (map->capacity > SIZE_MAX / 2U) {
+        baca_error_set(error, BACA_ERROR_MEMORY, "library map is too large");
+        return false;
+    }
+    const size_t capacity = map->capacity * 2U;
+    CatalogMapSlot *slots = baca_reallocarray(NULL, capacity, sizeof(*slots), error);
+    if (slots == NULL) {
+        return false;
+    }
+    memset(slots, 0, capacity * sizeof(*slots));
+    for (size_t index = 0U; index < map->capacity; ++index) {
+        if (map->slots[index].key == NULL) {
+            continue;
+        }
+        size_t slot = (size_t)(catalog_hash(map->slots[index].key) & (uint64_t)(capacity - 1U));
+        while (slots[slot].key != NULL) {
+            slot = (slot + 1U) & (capacity - 1U);
+        }
+        slots[slot] = map->slots[index];
+    }
+    free(map->slots);
+    map->slots = slots;
+    map->capacity = capacity;
+    return true;
+}
+
 static bool catalog_map_insert(CatalogMap *map, const char *key, size_t value, BacaError *error) {
     if (map->capacity == 0U) {
         baca_error_set(error, BACA_ERROR_INTERNAL, "library map is not initialized");
+        return false;
+    }
+    if (map->length >= map->capacity / 2U && !catalog_map_grow(map, error)) {
         return false;
     }
     size_t slot = (size_t)(catalog_hash(key) & (uint64_t)(map->capacity - 1U));
@@ -82,6 +117,7 @@ static bool catalog_map_insert(CatalogMap *map, const char *key, size_t value, B
         }
     }
     map->slots[slot] = (CatalogMapSlot){.key = key, .value = value};
+    ++map->length;
     return true;
 }
 
@@ -330,37 +366,119 @@ static int catalog_compare_books(const void *left_pointer, const void *right_poi
     return title == 0 ? strcmp(left->directory, right->directory) : title;
 }
 
+static int catalog_compare_formats(const void *left_pointer, const void *right_pointer) {
+    const BacaCatalogFormat *left = left_pointer;
+    const BacaCatalogFormat *right = right_pointer;
+    const size_t left_rank = catalog_format_rank(left->name);
+    const size_t right_rank = catalog_format_rank(right->name);
+    if (left_rank != right_rank) {
+        return left_rank < right_rank ? -1 : 1;
+    }
+    const int name = baca_casecmp(left->name, right->name);
+    return name == 0 ? strcmp(left->relative_path, right->relative_path) : name;
+}
+
+static bool catalog_walk_directory(BacaCatalog *catalog, int descriptor, const char *relative_directory, size_t depth,
+                                   CatalogMap *groups, BacaError *error) {
+    if (depth > BACA_CATALOG_MAX_DEPTH) {
+        (void)close(descriptor);
+        baca_error_set(error, BACA_ERROR_IO, "library nesting exceeds %u directories",
+                       (unsigned)BACA_CATALOG_MAX_DEPTH);
+        return false;
+    }
+    DIR *stream = fdopendir(descriptor);
+    if (stream == NULL) {
+        const int status = errno;
+        (void)close(descriptor);
+        baca_error_set(error, BACA_ERROR_IO, "could not scan library directory '%s': %s", relative_directory,
+                       strerror(status));
+        return false;
+    }
+
+    bool success = true;
+    for (;;) {
+        errno = 0;
+        struct dirent *entry = readdir(stream);
+        if (entry == NULL) {
+            if (errno != 0) {
+                baca_error_set(error, BACA_ERROR_IO, "could not finish scanning library directory '%s': %s",
+                               relative_directory, strerror(errno));
+                success = false;
+            }
+            break;
+        }
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        char *relative_path = relative_directory[0] == '\0' ? baca_strdup(entry->d_name, error)
+                                                             : baca_path_join(relative_directory, entry->d_name, error);
+        if (relative_path == NULL) {
+            free(relative_path);
+            success = false;
+            break;
+        }
+        struct stat status;
+        if (fstatat(dirfd(stream), entry->d_name, &status, AT_SYMLINK_NOFOLLOW) != 0) {
+            const int stat_error = errno;
+            free(relative_path);
+            if (stat_error == EACCES || stat_error == ENOENT) {
+                continue;
+            }
+            baca_error_set(error, BACA_ERROR_IO, "could not inspect library entry '%s': %s", entry->d_name,
+                           strerror(stat_error));
+            success = false;
+            break;
+        }
+        if (S_ISDIR(status.st_mode)) {
+            const int child = openat(dirfd(stream), entry->d_name, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+            if (child >= 0) {
+                success = catalog_walk_directory(catalog, child, relative_path, depth + 1U, groups, error);
+            } else if (errno != EACCES && errno != ENOENT && errno != ELOOP) {
+                baca_error_set(error, BACA_ERROR_IO, "could not open library directory '%s': %s", relative_path,
+                               strerror(errno));
+                success = false;
+            }
+        } else if (S_ISREG(status.st_mode)) {
+            const char *extension = catalog_supported_extension(relative_path);
+            success = extension == NULL || catalog_add_format(catalog, relative_path, extension, groups, error);
+        }
+        free(relative_path);
+        if (!success) {
+            break;
+        }
+    }
+    if (closedir(stream) != 0 && success) {
+        baca_error_set(error, BACA_ERROR_IO, "could not close library directory '%s': %s", relative_directory,
+                       strerror(errno));
+        success = false;
+    }
+    return success;
+}
+
 static bool catalog_collect_files(BacaCatalog *catalog, BacaError *error) {
     CatalogMap groups = {0};
-    size_t offset = 0U;
-    bool complete = false;
-    while (!complete) {
-        BacaSearchFiles files = {0};
-        if (!baca_search_files(&catalog->search, "", offset, BACA_CATALOG_PAGE_SIZE, &files, error)) {
-            catalog_map_free(&groups);
-            return false;
-        }
-        if (groups.capacity == 0U && !catalog_map_init(&groups, files.total, error)) {
-            baca_search_files_free(&files);
-            return false;
-        }
-        for (size_t index = 0U; index < files.length; ++index) {
-            const char *extension = catalog_supported_extension(files.items[index].relative_path);
-            if (extension != NULL && !catalog_add_format(catalog, files.items[index].relative_path, extension,
-                                                         &groups, error)) {
-                baca_search_files_free(&files);
-                catalog_map_free(&groups);
-                return false;
-            }
-        }
-        if (files.length == 0U || offset + files.length >= files.total) {
-            complete = true;
-        } else {
-            offset += files.length;
-        }
-        baca_search_files_free(&files);
+    const int root = open(catalog->search.root, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (root < 0) {
+        baca_error_set(error, BACA_ERROR_IO, "could not open library root '%s': %s", catalog->search.root,
+                       strerror(errno));
+        return false;
+    }
+    if (!catalog_map_init(&groups, 0U, error)) {
+        (void)close(root);
+        return false;
+    }
+    if (!catalog_walk_directory(catalog, root, "", 0U, &groups, error)) {
+        catalog_map_free(&groups);
+        return false;
     }
     catalog_map_free(&groups);
+    for (size_t index = 0U; index < catalog->length; ++index) {
+        BacaCatalogBook *book = &catalog->books[index];
+        if (book->format_count > 1U) {
+            qsort(book->formats, book->format_count, sizeof(*book->formats), catalog_compare_formats);
+        }
+        book->preferred_format = 0U;
+    }
     if (catalog->length > 1U) {
         qsort(catalog->books, catalog->length, sizeof(*catalog->books), catalog_compare_books);
     }
@@ -480,12 +598,125 @@ const BacaCatalogFormat *baca_catalog_preferred_format(const BacaCatalogBook *bo
     return &book->formats[book->preferred_format];
 }
 
+bool baca_catalog_apply_format_preferences(BacaCatalog *catalog, const BacaFormatPreferences *preferences,
+                                           BacaError *error) {
+    if (catalog == NULL || preferences == NULL) {
+        baca_error_set(error, BACA_ERROR_ARGUMENT, "invalid catalog format preferences");
+        return false;
+    }
+    CatalogMap books = {0};
+    if (!catalog_map_init(&books, catalog->length, error)) {
+        return false;
+    }
+    for (size_t book_index = 0U; book_index < catalog->length; ++book_index) {
+        if (!catalog_map_insert(&books, catalog->books[book_index].group_key, book_index, error)) {
+            catalog_map_free(&books);
+            return false;
+        }
+    }
+    for (size_t preference_index = 0U; preference_index < preferences->length; ++preference_index) {
+        const BacaFormatPreference *preference = &preferences->items[preference_index];
+        size_t book_index = 0U;
+        if (!catalog_map_lookup(&books, preference->book_key, &book_index)) {
+            continue;
+        }
+        BacaCatalogBook *book = &catalog->books[book_index];
+        for (size_t format_index = 0U; format_index < book->format_count; ++format_index) {
+            if (strcmp(book->formats[format_index].relative_path, preference->relative_path) == 0) {
+                book->preferred_format = format_index;
+                break;
+            }
+        }
+    }
+    catalog_map_free(&books);
+    return true;
+}
+
+bool baca_catalog_prefer_path(BacaCatalog *catalog, const char *path, const char **book_key,
+                              const char **relative_path) {
+    if (catalog == NULL || path == NULL) {
+        return false;
+    }
+    for (size_t book_index = 0U; book_index < catalog->length; ++book_index) {
+        BacaCatalogBook *book = &catalog->books[book_index];
+        for (size_t format_index = 0U; format_index < book->format_count; ++format_index) {
+            if (strcmp(book->formats[format_index].path, path) != 0) {
+                continue;
+            }
+            book->preferred_format = format_index;
+            if (book_key != NULL) {
+                *book_key = book->group_key;
+            }
+            if (relative_path != NULL) {
+                *relative_path = book->formats[format_index].relative_path;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
 void baca_catalog_matches_free(BacaCatalogMatches *matches) {
     if (matches == NULL) {
         return;
     }
     free(matches->book_indices);
     *matches = (BacaCatalogMatches){0};
+}
+
+static bool catalog_text_matches(const char *text, const char *token, size_t token_length) {
+    if (text == NULL || token_length == 0U) {
+        return false;
+    }
+    const size_t text_length = strlen(text);
+    if (token_length > text_length) {
+        return false;
+    }
+    for (size_t offset = 0U; offset <= text_length - token_length; ++offset) {
+        size_t index = 0U;
+        while (index < token_length &&
+               tolower((unsigned char)text[offset + index]) == tolower((unsigned char)token[index])) {
+            ++index;
+        }
+        if (index == token_length) {
+            return true;
+        }
+    }
+    size_t token_index = 0U;
+    for (size_t text_index = 0U; text_index < text_length && token_index < token_length; ++text_index) {
+        if (tolower((unsigned char)text[text_index]) == tolower((unsigned char)token[token_index])) {
+            ++token_index;
+        }
+    }
+    return token_index == token_length;
+}
+
+static bool catalog_book_matches(const BacaCatalogBook *book, const char *query) {
+    const char *cursor = query;
+    while (*cursor != '\0') {
+        while (isspace((unsigned char)*cursor)) {
+            ++cursor;
+        }
+        const char *token = cursor;
+        while (*cursor != '\0' && !isspace((unsigned char)*cursor)) {
+            ++cursor;
+        }
+        const size_t token_length = (size_t)(cursor - token);
+        if (token_length == 0U) {
+            continue;
+        }
+        bool found = catalog_text_matches(book->title, token, token_length) ||
+                     catalog_text_matches(book->author, token, token_length) ||
+                     catalog_text_matches(book->directory, token, token_length);
+        for (size_t index = 0U; !found && index < book->format_count; ++index) {
+            found = catalog_text_matches(book->formats[index].relative_path, token, token_length) ||
+                    catalog_text_matches(book->formats[index].name, token, token_length);
+        }
+        if (!found) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool baca_catalog_search(BacaCatalog *catalog, const char *query, BacaCatalogMatches *matches, BacaError *error) {
@@ -565,6 +796,12 @@ bool baca_catalog_search(BacaCatalog *catalog, const char *query, BacaCatalogMat
             offset += files.length;
         }
         baca_search_files_free(&files);
+    }
+    for (size_t book_index = 0U; book_index < catalog->length; ++book_index) {
+        if (!seen[book_index] && catalog_book_matches(&catalog->books[book_index], query)) {
+            seen[book_index] = true;
+            indices[length++] = book_index;
+        }
     }
     catalog_map_free(&paths);
     free(seen);

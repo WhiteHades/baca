@@ -57,14 +57,15 @@ static BacaTestResult test_open_and_migrate_idempotently(void) {
     TEST_ASSERT_MSG(baca_database_migrate(&database, &error), "%s", error.message);
     int metadata_count = -1;
     int table_count = -1;
-    TEST_ASSERT(sqlite_scalar_int(database.handle, "SELECT count(*) FROM metadata WHERE version IN (0, 1)",
-                                  &metadata_count));
+    TEST_ASSERT(sqlite_scalar_int(database.handle, "SELECT count(*) FROM metadata WHERE version IN (0, 1, 2)",
+                                   &metadata_count));
     TEST_ASSERT(sqlite_scalar_int(database.handle,
-                                  "SELECT count(*) FROM sqlite_master WHERE type='table' AND "
-                                  "name IN ('metadata', 'reading_history', 'bookmarks')",
-                                  &table_count));
-    TEST_ASSERT_INT(metadata_count, 2);
-    TEST_ASSERT_INT(table_count, 3);
+                                   "SELECT count(*) FROM sqlite_master WHERE type='table' AND "
+                                   "name IN ('metadata', 'reading_history', 'bookmarks', "
+                                   "'library_format_preferences')",
+                                   &table_count));
+    TEST_ASSERT_INT(metadata_count, 3);
+    TEST_ASSERT_INT(table_count, 4);
     baca_database_close(&database);
     TEST_ASSERT(database.handle == NULL && database.path == NULL);
     return BACA_TEST_PASS;
@@ -281,6 +282,33 @@ static BacaTestResult test_bookmark_crud(void) {
     return BACA_TEST_PASS;
 }
 
+static BacaTestResult test_library_format_preferences(void) {
+    BacaDatabase database = {0};
+    BacaError error = {0};
+    TEST_ASSERT_MSG(open_test_database("database/formats.db", true, &database, &error), "%s", error.message);
+    TEST_ASSERT_MSG(baca_database_save_format_preference(&database, "/library/one", "author/book",
+                                                         "author/book.pdf", &error), "%s", error.message);
+    TEST_ASSERT_MSG(baca_database_save_format_preference(&database, "/library/two", "author/book",
+                                                         "author/book.epub", &error), "%s", error.message);
+    TEST_ASSERT_MSG(baca_database_save_format_preference(&database, "/library/one", "author/book",
+                                                         "author/book.epub", &error), "%s", error.message);
+
+    BacaFormatPreferences preferences = {0};
+    TEST_ASSERT_MSG(baca_database_format_preferences(&database, "/library/one", &preferences, &error), "%s",
+                    error.message);
+    TEST_ASSERT_SIZE(preferences.length, 1U);
+    TEST_ASSERT_STR(preferences.items[0].book_key, "author/book");
+    TEST_ASSERT_STR(preferences.items[0].relative_path, "author/book.epub");
+    baca_format_preferences_free(&preferences);
+
+    TEST_ASSERT_MSG(baca_database_format_preferences(&database, "/library/missing", &preferences, &error), "%s",
+                    error.message);
+    TEST_ASSERT_SIZE(preferences.length, 0U);
+    baca_format_preferences_free(&preferences);
+    baca_database_close(&database);
+    return BACA_TEST_PASS;
+}
+
 static BacaTestResult test_control_and_embedded_nul_values(void) {
     BacaDatabase database = {0};
     BacaError error = {0};
@@ -390,6 +418,7 @@ const BacaTestCase *baca_database_test_cases(size_t *count) {
         {.name = "save_list_order_nth_fuzzy_and_stale", .function = test_save_list_order_nth_fuzzy_and_stale},
         {.name = "progress_values", .function = test_progress_values},
         {.name = "bookmark_crud", .function = test_bookmark_crud},
+        {.name = "library_format_preferences", .function = test_library_format_preferences},
         {.name = "control_and_embedded_nul_values", .function = test_control_and_embedded_nul_values},
         {.name = "concurrent_first_migration", .function = test_concurrent_first_migration},
     };
