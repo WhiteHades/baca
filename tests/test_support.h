@@ -41,6 +41,7 @@ void baca_test_support_cleanup(void);
 [[nodiscard]] int baca_test_run(const BacaTestSuite *suites, size_t suite_count);
 
 [[nodiscard]] const BacaTestCase *baca_common_test_cases(size_t *count);
+[[nodiscard]] const BacaTestCase *baca_catalog_test_cases(size_t *count);
 [[nodiscard]] const BacaTestCase *baca_comic_test_cases(size_t *count);
 [[nodiscard]] const BacaTestCase *baca_config_test_cases(size_t *count);
 [[nodiscard]] const BacaTestCase *baca_database_test_cases(size_t *count);

@@ -26,6 +26,7 @@ static const char BACA_DEFAULT_CONFIG[] =
     "[General]\n"
     "# pick your favorite image viewer\n"
     "PreferredImageViewer = auto\n"
+    "LibraryPath = auto\n"
     "\n"
     "# int or css value string like 90%%\n"
     "# (escape percent with double percent %%)\n"
@@ -566,7 +567,8 @@ static bool baca_config_build(const BacaIni *ini, BacaConfig *config, BacaError 
 
     result.preferred_image_viewer =
         baca_strdup(baca_ini_get(ini, "General", "PreferredImageViewer", "auto"), error);
-    if (result.preferred_image_viewer == nullptr ||
+    result.library_path = baca_strdup(baca_ini_get(ini, "General", "LibraryPath", "auto"), error);
+    if (result.preferred_image_viewer == nullptr || result.library_path == nullptr ||
         !baca_config_parse_justification(baca_ini_get(ini, "General", "TextJustification", "justify"),
                                          &result.justification, error) ||
         !baca_config_parse_bool("General", "Pretty", baca_ini_get(ini, "General", "Pretty", "no"),
@@ -622,7 +624,7 @@ static bool baca_config_build(const BacaIni *ini, BacaConfig *config, BacaError 
 }
 
 static bool baca_config_output_empty(const BacaConfig *config) {
-    if (config->preferred_image_viewer != nullptr || config->max_text_width != 0 ||
+    if (config->preferred_image_viewer != nullptr || config->library_path != nullptr || config->max_text_width != 0 ||
         config->max_text_width_percent || config->justification != BACA_JUSTIFY_LEFT || config->pretty ||
         config->page_scroll_duration != 0.0 || config->image_mode != BACA_IMAGE_MODE_AUTO ||
         config->image_mode_explicit || config->show_image_as_ansi || config->dark.background != 0U ||
@@ -767,6 +769,7 @@ void baca_config_free(BacaConfig *config) {
         return;
     }
     free(config->preferred_image_viewer);
+    free(config->library_path);
     BacaKeyList *lists[] = {
         &config->keymaps.toggle_dark,      &config->keymaps.scroll_down,
         &config->keymaps.scroll_up,        &config->keymaps.page_down,

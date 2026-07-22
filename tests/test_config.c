@@ -36,6 +36,7 @@ static BacaTestResult test_defaults(void) {
     BacaTestResult result = load_config_text("defaults", "", &config);
     TEST_ASSERT(result == BACA_TEST_PASS);
     TEST_ASSERT_STR(config.preferred_image_viewer, "auto");
+    TEST_ASSERT_STR(config.library_path, "auto");
     TEST_ASSERT_INT(config.max_text_width, 80);
     TEST_ASSERT(!config.max_text_width_percent);
     TEST_ASSERT_INT(config.justification, BACA_JUSTIFY_FULL);
@@ -77,6 +78,7 @@ static BacaTestResult test_partial_case_insensitive_overrides(void) {
     BacaTestResult result = load_config_text("partial", text, &config);
     TEST_ASSERT(result == BACA_TEST_PASS);
     TEST_ASSERT_STR(config.preferred_image_viewer, "viu");
+    TEST_ASSERT_STR(config.library_path, "auto");
     TEST_ASSERT_INT(config.max_text_width, 73);
     TEST_ASSERT_INT(config.justification, BACA_JUSTIFY_RIGHT);
     TEST_ASSERT(config.pretty);
@@ -226,6 +228,7 @@ static BacaTestResult test_default_file_creation_is_isolated(void) {
     TEST_ASSERT((status.st_mode & 0777U) == 0600U);
     TEST_ASSERT_STR(config.preferred_image_viewer, "auto");
     TEST_ASSERT(strstr(baca_config_default_text(), "MaxTextWidth = 80") != NULL);
+    TEST_ASSERT(strstr(baca_config_default_text(), "LibraryPath = auto") != NULL);
     TEST_ASSERT(strstr(baca_config_default_text(), "ImageMode = auto") != NULL);
     TEST_ASSERT(strstr(baca_config_default_text(), "TogglePdfView = v") != NULL);
     TEST_ASSERT(strstr(baca_config_default_text(), "AddBookmark = b") != NULL);

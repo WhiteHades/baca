@@ -22,6 +22,7 @@ TEST_LDLIBS = -lutil -lfontconfig
 
 SOURCES = \
 	src/app.c \
+	src/catalog.c \
 	src/common.c \
 	src/comic.c \
 	src/config.c \
@@ -43,7 +44,7 @@ SOURCES = \
 	src/tui.c \
 	src/main.c
 OBJECTS = $(SOURCES:src/%.c=build/%.o)
-TEST_SOURCES = tests/test_main.c tests/test_common.c tests/test_comic.c tests/test_config.c tests/test_database.c \
+TEST_SOURCES = tests/test_main.c tests/test_catalog.c tests/test_common.c tests/test_comic.c tests/test_config.c tests/test_database.c \
 	tests/test_document.c tests/test_fb2.c tests/test_graphics.c tests/test_layout.c tests/test_library.c \
 	tests/test_remote.c tests/test_search.c tests/test_support.c tests/test_text.c
 

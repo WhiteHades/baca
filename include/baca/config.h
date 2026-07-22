@@ -52,6 +52,7 @@ typedef enum BacaImageMode : uint8_t {
 
 typedef struct BacaConfig {
     char *preferred_image_viewer;
+    char *library_path;
     int max_text_width;
     bool max_text_width_percent;
     BacaJustification justification;
