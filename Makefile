@@ -9,6 +9,8 @@ INSTALL ?= install
 CARGO ?= cargo
 RUST_TOOLCHAIN ?= 1.97.0
 FFF_TARGET_DIR ?= $(CURDIR)/vendor/fff/target
+FFF_CFLAGS ?=
+FFF_CXXFLAGS ?=
 LIBDIR ?= $(PREFIX)/lib/baca
 LICENSEDIR ?= $(DATADIR)/licenses/baca
 PKGS = ncursesw sqlite3 glib-2.0 libxml-2.0 libzip libarchive libpcre2-8 gdk-pixbuf-2.0 poppler-glib cairo libcurl
@@ -84,7 +86,8 @@ fff: build/libfff_c.so
 
 build/libfff_c.so: vendor/fff/Cargo.lock
 	@mkdir -p build
-	CARGO_TARGET_DIR="$(FFF_TARGET_DIR)" "$(CARGO)" +"$(RUST_TOOLCHAIN)" build \
+	CFLAGS="$(FFF_CFLAGS)" CXXFLAGS="$(FFF_CXXFLAGS)" CARGO_TARGET_DIR="$(FFF_TARGET_DIR)" \
+		"$(CARGO)" +"$(RUST_TOOLCHAIN)" build \
 		--manifest-path vendor/fff/Cargo.toml --locked --release -p fff-c
 	cp "$(FFF_TARGET_DIR)/release/libfff_c.so" $@
 
@@ -110,11 +113,12 @@ sanitize:
 	$(MAKE) clean
 	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+	LD_LIBRARY_PATH="$(CURDIR)/build:$${LD_LIBRARY_PATH:-}" \
 	$(MAKE) CC="$(CC)" \
 		CFLAGS="-O1 -g -std=c23 -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
 		-Wformat=2 -Wstrict-prototypes -Wmissing-prototypes -Werror=implicit-function-declaration \
 		-fsanitize=address,undefined -fno-omit-frame-pointer" \
-		LDFLAGS="$(LDFLAGS) -fsanitize=address,undefined" test
+		LDFLAGS="-fsanitize=address,undefined" test
 
 test-gcc:
 	$(MAKE) clean
