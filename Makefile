@@ -161,7 +161,9 @@ user-uninstall:
 	$(MAKE) uninstall PREFIX="$(HOME)/.local"
 
 installcheck: build/mereader-tui
+	@command -v python3 >/dev/null 2>&1 || { printf '%s\n' 'error: python3 is required for install testing' >&2; exit 1; }
 	rm -rf build/install-root
+	rm -rf build/install-user-home
 	$(MAKE) install DESTDIR="$(CURDIR)/build/install-root" PREFIX=/usr
 	test -x build/install-root/usr/bin/mereader-tui
 	test -x build/install-root/usr/lib/mereader-tui/libfff_c.so
@@ -178,6 +180,9 @@ installcheck: build/mereader-tui
 		XDG_CACHE_HOME="$(CURDIR)/build/install-root/xdg-cache" \
 		LD_LIBRARY_PATH= LD_PRELOAD= \
 		build/install-root/usr/bin/mereader-tui --doctor
+	python3 tests/install_test.py \
+		"$(CURDIR)/build/install-root/usr/bin/mereader-tui" \
+		"$(CURDIR)/build/install-root/qa"
 	$(MAKE) uninstall DESTDIR="$(CURDIR)/build/install-root" PREFIX=/usr
 	test ! -e build/install-root/usr/bin/mereader-tui
 	test ! -e build/install-root/usr/lib/mereader-tui/libfff_c.so
@@ -188,6 +193,18 @@ installcheck: build/mereader-tui
 	test ! -e build/install-root/usr/lib/mereader-tui
 	test ! -e build/install-root/usr/share/mereader-tui
 	test ! -e build/install-root/usr/share/licenses/mereader-tui
+	HOME="$(CURDIR)/build/install-user-home" $(MAKE) user-install
+	test -x build/install-user-home/.local/bin/mereader-tui
+	test -x build/install-user-home/.local/lib/mereader-tui/libfff_c.so
+	python3 tests/install_test.py \
+		"$(CURDIR)/build/install-user-home/.local/bin/mereader-tui" \
+		"$(CURDIR)/build/install-user-home/qa"
+	HOME="$(CURDIR)/build/install-user-home" $(MAKE) user-uninstall
+	test ! -e build/install-user-home/.local/bin/mereader-tui
+	test ! -e build/install-user-home/.local/lib/mereader-tui/libfff_c.so
+	test ! -e build/install-user-home/.local/share/mereader-tui/config.ini
+	test ! -e build/install-user-home/.local/share/man/man1/mereader-tui.1
+	test ! -e build/install-user-home/.local/share/licenses/mereader-tui
 
 clean:
 	rm -rf build
