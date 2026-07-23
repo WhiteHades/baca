@@ -1,0 +1,199 @@
+.TH mereader-tui 1 "july 2026" "mereader-tui 0.1.1" "user commands"
+.SH name
+mereader-tui \- terminal ebook reader and calibre library manager
+.SH synopsis
+.B mereader-tui
+.RI [ options ]
+.RI [ path | url | history-number | search-terms ]
+.SH description
+.B mereader-tui
+is a native c23 terminal reader for epub, epub3, pdf, fb2, txt, markdown,
+cbz, cbr, cb7, png, jpeg, gif, webp, bmp, and svg files.
+extractable, drm-free mobi, prc, azw, and azw3 files need
+.BR mobitool (1).
+running mereader-tui without arguments opens the library. reading position,
+bookmarks, and history are stored automatically.
+.PP
+mereader-tui indexes a configured library in the same process with the bundled
+fff search library. a directory that contains
+.I metadata.db
+is treated as a calibre library. the first shelf shows all logical books.
+an author shelf and grouped format choices are also available. epub is
+preferred when one book has several formats.
+.PP
+http and https documents are downloaded into a private cache and can be
+reopened offline. urls with credentials are rejected, tls verification is
+enabled, and each download is limited to 256 mib.
+.SH options
+.TP
+.BR \-h , " " \-\-help
+print command help and exit.
+.TP
+.BR \-v , " " \-\-version
+print the version and exit.
+.TP
+.BR \-d , " " \-\-doctor
+print runtime paths and report whether mobi or azw support is available.
+.TP
+.BR \-r , " " \-\-history
+print reading history and exit.
+.SH arguments
+.TP
+.I path
+open a local ebook, document, comic archive, or image.
+.TP
+.I url
+open an http or https document url.
+.TP
+.I history-number
+open a one-based row from reading history.
+.TP
+.I search-terms
+open the best fuzzy match across history path, title, and author fields.
+.SH reader keys
+.TP
+.BR j , " " k , " arrows"
+scroll down or up.
+.TP
+.BR ctrl-f , " " ctrl-b , " " pagedown , " " pageup
+move by pages.
+.TP
+.BR gg , " " G
+jump to the beginning or end. a numeric prefix jumps to a layout line.
+.TP
+.BR / , " " f2
+search forward or backward.
+.TP
+.BR n , " " N
+repeat the search forward or backward.
+.TP
+.BR b , " " B
+save a bookmark or open the bookmark list.
+.TP
+.BR ctrl-o , " " ctrl-i
+move backward or forward through jump history.
+.TP
+.BR tab , " " M
+open the table of contents or metadata.
+.TP
+.BR ? , " " f1
+show every configured key.
+.TP
+.B f12
+save the current terminal view as an svg file in the working directory.
+.TP
+.BR q , " " esc
+cancel the current action or quit.
+.SH library keys
+.TP
+.BR j , " " k , " arrows"
+move the selection.
+.TP
+.BR ctrl-f , " " ctrl-b , " " pagedown , " " pageup
+move by one screen.
+.TP
+.BR gg , " " G
+select the first or last item.
+.TP
+.BR enter , " " l
+open the selected item. an author opens that author's book shelf.
+.TP
+.B /
+filter the current shelf with fff.
+.TP
+.B "space space"
+open an independent book picker with cover and metadata details.
+.TP
+.B v
+switch between list and card views.
+.TP
+.B a
+switch between the all-books and author shelves.
+.TP
+.B f
+show every available format for the selected book.
+.TP
+.BR backspace , " " esc , " " h
+move to the parent shelf or clear the active filter.
+.TP
+.B s
+cycle recent, title, and author sorting.
+.TP
+.B r
+rescan the library and remove missing local files. url entries remain.
+.TP
+.B o
+open a local path or http or https url.
+.TP
+.B ?
+open or close library help.
+.TP
+.B q
+quit the library.
+.SH files
+.TP
+.I ~/.config/mereader-tui/config.ini
+user configuration. created with secure permissions on first use.
+.IP
+.B LibraryPath=auto
+checks
+.I ~/Calibre Library
+and
+.IR ~/Documents/Calibre Library .
+.TP
+.I ~/.cache/mereader-tui/mereader-tui.db
+sqlite reading history, bookmark, and library preference database.
+.TP
+.I ~/.cache/mereader-tui/downloads/
+private persistent http and https document cache.
+.SH environment
+.TP
+.B MEREADER_TUI_LIBRARY_PATH
+override
+.B LibraryPath
+for the current process.
+.TP
+.B XDG_CONFIG_HOME
+change the config base directory. the default is
+.IR ~/.config .
+.TP
+.B XDG_CACHE_HOME
+change the cache base directory. the default is
+.IR ~/.cache .
+.SH upgrade from baca
+on its first start, version 0.1.1 imports legacy state once. it copies the
+former config file, imports the former
+.I baca.db
+database, and copies cached downloads. existing files in the new
+mereader-tui directories always win. current mereader-tui state directories
+are kept in owner-only mode when migration state is checked.
+.PP
+the import does not change or remove the legacy files. after a successful
+import, mereader-tui writes
+.I .mereader-tui-legacy-state-import-v1.complete
+under the xdg config base.
+.I .mereader-tui-legacy-state-import-v1.lock
+remains under the xdg cache base to coordinate concurrent starts.
+.PP
+only the
+.B mereader-tui
+command is installed. there is no
+.B baca
+command alias. the install targets remove files installed by the previous name
+under the same prefix.
+.B BACA_LIBRARY_PATH
+is ignored and must be replaced with
+.BR MEREADER_TUI_LIBRARY_PATH .
+.SH dependencies
+mobi and azw-family files need
+.B mobitool
+from libmobi in
+.BR PATH .
+the extracted book must be drm-free and convertible to epub. kindle print
+replica and azw4 books are not supported. linked native libraries handle all
+other documented formats.
+.SH exit status
+returns zero on success and nonzero for invalid arguments, unavailable
+dependencies, corrupt or unsupported documents, and runtime failures.
+.SH see also
+.BR curl (1)

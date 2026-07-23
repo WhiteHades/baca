@@ -2314,7 +2314,7 @@ static void save_screenshot(BacaTuiState *state) {
     (void)localtime_r(&timestamp.tv_sec, &local_time);
     char path[128] = {0};
     (void)snprintf(path, sizeof(path),
-                   "baca_%04d%02d%02d-%02d%02d%02d-%09ld.svg",
+                   BACA_NAME "_%04d%02d%02d-%02d%02d%02d-%09ld.svg",
                    local_time.tm_year + 1900, local_time.tm_mon + 1,
                    local_time.tm_mday, local_time.tm_hour, local_time.tm_min,
                    local_time.tm_sec, timestamp.tv_nsec);
@@ -2460,7 +2460,7 @@ static void open_image(BacaTuiState *state, size_t block_index) {
   }
   if (standalone_image) {
     BacaResource empty_resource = {0};
-    char *directory = baca_make_temp_directory("baca-image-", &error);
+    char *directory = baca_make_temp_directory(BACA_NAME "-image-", &error);
     char *filename = directory == NULL
                          ? NULL
                          : resource_filename(image, &empty_resource, &error);
@@ -2501,7 +2501,7 @@ static void open_image(BacaTuiState *state, size_t block_index) {
                                                : "Cannot load image resource");
     goto cleanup;
   }
-  directory = baca_make_temp_directory("baca-image-", &error);
+  directory = baca_make_temp_directory(BACA_NAME "-image-", &error);
   filename = resource_filename(image, &resource, &error);
   if (directory == NULL || filename == NULL) {
     open_alert(state, error.message);

@@ -591,10 +591,10 @@ static char *create_pdf_fixture(const char *relative, bool huge_page, bool varie
     const double first_width = huge_page ? 1000001.0 : 612.0;
     const double first_height = huge_page ? 20.0 : 792.0;
     cairo_surface_t *surface = cairo_pdf_surface_create(path, first_width, first_height);
-    cairo_pdf_surface_set_metadata(surface, CAIRO_PDF_METADATA_TITLE, "Baca PDF Fixture");
+    cairo_pdf_surface_set_metadata(surface, CAIRO_PDF_METADATA_TITLE, "mereader-tui PDF Fixture");
     cairo_pdf_surface_set_metadata(surface, CAIRO_PDF_METADATA_AUTHOR, "Fixture Author");
     cairo_pdf_surface_set_metadata(surface, CAIRO_PDF_METADATA_SUBJECT, "Fixture subject");
-    cairo_pdf_surface_set_metadata(surface, CAIRO_PDF_METADATA_CREATOR, "Baca Cairo Tests");
+    cairo_pdf_surface_set_metadata(surface, CAIRO_PDF_METADATA_CREATOR, "mereader-tui Cairo Tests");
     cairo_pdf_surface_set_metadata(surface, CAIRO_PDF_METADATA_CREATE_DATE, "2026-07-19T12:00:00Z");
     cairo_pdf_surface_set_metadata(surface, CAIRO_PDF_METADATA_MOD_DATE, "2026-07-19T13:00:00Z");
     cairo_t *context = cairo_create(surface);
@@ -816,7 +816,7 @@ static char *create_tall_destination_pdf_fixture(const char *relative) {
 static bool run_pdf_pty(PdfPtyResult *result) {
     char *path = create_pdf_fixture("pdf/pty/reader.pdf", false, false);
     if (path == NULL ||
-        !baca_test_write_text("pdf/pty/config/baca/config.ini",
+        !baca_test_write_text("pdf/pty/config/mereader-tui/config.ini",
                               "[General]\nImageMode=kitty\nMaxTextWidth=80\nPageScrollDuration=0\n"
                               "[Keymaps]\nTogglePdfView=ctrl+x\nOpenHelp=z\n")) {
         free(path);
@@ -864,7 +864,7 @@ static bool run_pdf_pty(PdfPtyResult *result) {
         (void)setenv("BACA_PDF_PTY_CHILD", "1", 1);
         (void)setenv("BACA_PDF_PTY_PATH", path, 1);
         (void)setenv("BACA_PDF_PTY_OPEN_FD", descriptor, 1);
-        (void)execl("./build/tests/test_baca", "test_baca", (char *)NULL);
+        (void)execl("./build/tests/test_mereader_tui", "test_mereader_tui", (char *)NULL);
         _exit(127);
     }
 
@@ -1015,7 +1015,7 @@ cleanup:
 
 static bool pdf_saved_progress(const char *cache_root, const char *path, double *progress) {
     BacaError error = {0};
-    char *database_path = baca_path_join(cache_root, "baca/baca.db", &error);
+    char *database_path = baca_path_join(cache_root, "mereader-tui/mereader-tui.db", &error);
     if (database_path == NULL) {
         return false;
     }
@@ -1044,7 +1044,7 @@ static bool run_pdf_progress_pty(const char *name, const char *path, const struc
                                  BacaString *output) {
     char config_relative[192] = {0};
     const int config_length = snprintf(config_relative, sizeof(config_relative),
-                                       "pdf/progress/%s/config/baca/config.ini", name);
+                                        "pdf/progress/%s/config/mereader-tui/config.ini", name);
     if (config_length <= 0 || (size_t)config_length >= sizeof(config_relative) ||
         !baca_test_write_text(config_relative,
                               "[General]\nImageMode=kitty\nMaxTextWidth=80\nPageScrollDuration=0\n")) {
@@ -1110,7 +1110,7 @@ static bool run_pdf_progress_pty(const char *name, const char *path, const struc
         (void)setenv("BACA_PDF_PTY_CHILD", "1", 1);
         (void)setenv("BACA_PDF_PTY_PATH", path, 1);
         (void)setenv("BACA_PDF_PTY_OPEN_FD", descriptor, 1);
-        (void)execl("./build/tests/test_baca", "test_baca", (char *)NULL);
+        (void)execl("./build/tests/test_mereader_tui", "test_mereader_tui", (char *)NULL);
         _exit(127);
     }
 
@@ -1155,7 +1155,7 @@ static bool run_pdf_progress_pty(const char *name, const char *path, const struc
 static bool run_non_pdf_key_conflict_pty(BacaString *output) {
     char *path = create_key_conflict_epub_fixture("pdf/key-conflict/reader.epub");
     if (path == NULL ||
-        !baca_test_write_text("pdf/key-conflict/config/baca/config.ini",
+        !baca_test_write_text("pdf/key-conflict/config/mereader-tui/config.ini",
                               "[General]\nImageMode=placeholder\nMaxTextWidth=80\nPageScrollDuration=0\n"
                               "[Keymaps]\nConfirm=v\nTogglePdfView=v\n") ||
         !baca_test_mkdir("pdf/key-conflict/cache")) {
@@ -1189,7 +1189,7 @@ static bool run_non_pdf_key_conflict_pty(BacaString *output) {
         (void)setenv("TERM", "xterm-256color", 1);
         (void)setenv("XDG_CONFIG_HOME", config_root, 1);
         (void)setenv("XDG_CACHE_HOME", cache_root, 1);
-        (void)execl("./build/baca", "baca", path, (char *)NULL);
+        (void)execl("./build/mereader-tui", "mereader-tui", path, (char *)NULL);
         _exit(127);
     }
 
@@ -1249,7 +1249,7 @@ static bool run_pdf_current_page_search_pty(BacaString *output, unsigned *stage)
     *stage = 0U;
     char *path = create_tall_destination_pdf_fixture("pdf/search-pty/reader.pdf");
     if (path == NULL ||
-        !baca_test_write_text("pdf/search-pty/config/baca/config.ini",
+        !baca_test_write_text("pdf/search-pty/config/mereader-tui/config.ini",
                                "[General]\nImageMode=kitty\nMaxTextWidth=80\nPageScrollDuration=0\n"
                                "[Keymaps]\nTogglePdfView=ctrl+x\nSearchBackward=u\n") ||
         !baca_test_mkdir("pdf/search-pty/cache")) {
@@ -1305,7 +1305,7 @@ static bool run_pdf_current_page_search_pty(BacaString *output, unsigned *stage)
         (void)setenv("BACA_PDF_PTY_CHILD", "1", 1);
         (void)setenv("BACA_PDF_PTY_PATH", path, 1);
         (void)setenv("BACA_PDF_PTY_OPEN_FD", descriptor, 1);
-        (void)execl("./build/tests/test_baca", "test_baca", (char *)NULL);
+        (void)execl("./build/tests/test_mereader_tui", "test_mereader_tui", (char *)NULL);
         _exit(127);
     }
 
@@ -1359,7 +1359,7 @@ static bool run_pdf_resize_retry_pty(BacaString *output, unsigned *stage) {
     *stage = 0U;
     char *path = create_tall_link_pdf_fixture("pdf/resize-retry/reader.pdf");
     if (path == NULL ||
-        !baca_test_write_text("pdf/resize-retry/config/baca/config.ini",
+        !baca_test_write_text("pdf/resize-retry/config/mereader-tui/config.ini",
                               "[General]\nImageMode=kitty\nMaxTextWidth=80\nPageScrollDuration=0\n") ||
         !baca_test_mkdir("pdf/resize-retry/cache")) {
         free(path);
@@ -1414,7 +1414,7 @@ static bool run_pdf_resize_retry_pty(BacaString *output, unsigned *stage) {
         (void)setenv("BACA_PDF_PTY_CHILD", "1", 1);
         (void)setenv("BACA_PDF_PTY_PATH", path, 1);
         (void)setenv("BACA_PDF_PTY_OPEN_FD", descriptor, 1);
-        (void)execl("./build/tests/test_baca", "test_baca", (char *)NULL);
+        (void)execl("./build/tests/test_mereader_tui", "test_mereader_tui", (char *)NULL);
         _exit(127);
     }
 
@@ -1641,10 +1641,10 @@ static BacaTestResult test_open_metadata_toc_text_links_and_cleanup(void) {
     TEST_ASSERT_MSG(baca_document_open(&document, path, &error), "%s", error.message);
     TEST_ASSERT_INT(document.format, BACA_FORMAT_PDF);
     TEST_ASSERT_INT(document.default_presentation, BACA_PRESENTATION_FIXED);
-    TEST_ASSERT_STR(document.metadata.title, "Baca PDF Fixture");
+    TEST_ASSERT_STR(document.metadata.title, "mereader-tui PDF Fixture");
     TEST_ASSERT_STR(document.metadata.author, "Fixture Author");
     TEST_ASSERT_STR(document.metadata.description, "Fixture subject");
-    TEST_ASSERT_STR(document.metadata.creator, "Baca Cairo Tests");
+    TEST_ASSERT_STR(document.metadata.creator, "mereader-tui Cairo Tests");
     TEST_ASSERT(document.metadata.producer != NULL && strstr(document.metadata.producer, "cairo") != NULL);
     TEST_ASSERT(document.metadata.creation_date != NULL &&
                 strstr(document.metadata.creation_date, "2026-07-19T12:00:00") != NULL);

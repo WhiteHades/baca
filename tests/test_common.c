@@ -129,10 +129,10 @@ static BacaTestResult test_uri_components_and_traversal(void) {
 
 static BacaTestResult test_xdg_isolation(void) {
     BacaError error = {0};
-    char *expected_config = baca_test_path("xdg-config/baca/config.ini");
-    char *expected_cache = baca_test_path("xdg-cache/baca/history/baca.db");
+    char *expected_config = baca_test_path("xdg-config/mereader-tui/config.ini");
+    char *expected_cache = baca_test_path("xdg-cache/mereader-tui/history/mereader-tui.db");
     char *config = baca_xdg_config_path("config.ini", &error);
-    char *cache = baca_xdg_cache_path("history/baca.db", &error);
+    char *cache = baca_xdg_cache_path("history/mereader-tui.db", &error);
     TEST_ASSERT(expected_config != NULL && expected_cache != NULL && config != NULL && cache != NULL);
     TEST_ASSERT_STR(config, expected_config);
     TEST_ASSERT_STR(cache, expected_cache);

@@ -1,33 +1,51 @@
-# baca
+# mereader-tui
 
-a fast terminal ebook reader and library for linux.
+<p align="center">
+  <img src="resources/brand/mereader-tui.png" alt="mereader-tui pixel art logo" width="240">
+</p>
 
-![baca screenshot](https://github.com/wustho/baca/assets/43810055/82d5beb0-d061-4e4c-82ed-a3bd84074d2f)
+<p align="center">
+  <a href="https://github.com/whitehades/mereader-tui/actions/workflows/ci.yml"><img src="https://github.com/whitehades/mereader-tui/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-gpl--3.0-cba6f7" alt="gpl 3.0 license"></a>
+</p>
+
+a fast, local-first terminal ebook reader and calibre library manager for linux. it reads epub, pdf, mobi, fb2, comic archives, markdown, and images in a keyboard-driven tui.
+
+```text
+        .--------. .--------.
+       /  >_     | |  read  \
+      /__________|_|__________\
+           mereader-tui
+```
+
+![mereader-tui reader preview](resources/brand/preview.svg)
 
 ## features
 
 - reads epub, epub3, pdf, fb2, txt, markdown, cbz, cbr, cb7, png, jpeg, gif, webp, bmp, and svg
-- reads mobi, prc, azw, azw3, and azw4 when `mobitool` is installed
+- reads extractable, drm-free mobi, prc, azw, and azw3 files through `mobitool`
 - indexes calibre libraries and ordinary book folders with the bundled fff search engine
-- groups formats for the same book and prefers epub when available
-- remembers reading progress and bookmarks automatically
-- opens local files and http(s) urls with a private offline cache
+- opens on an all-books dashboard with list and card views
+- groups formats for the same book and prefers epub when it is available
+- finds any indexed book through an independent picker with cover and metadata details
+- saves reading progress and bookmarks automatically
+- opens local files and http or https urls with a private offline cache
 - renders images with kitty graphics, true-color ansi, or a text fallback
-- provides regex document search, table of contents, metadata, links, themes, and configurable keys
+- provides regular expression search, a table of contents, metadata, links, themes, and configurable keys
 
 ## install
 
-baca currently supports linux with a utf-8 locale. building requires gcc 14+ or clang 18+, rust 1.97, cargo, make, and `pkg-config`.
+mereader-tui supports linux with a utf-8 locale. building needs gcc 14 or later, or clang 18 or later. it also needs rust 1.97, cargo, make, and `pkg-config`.
 
 clone the repository with its pinned fff submodule:
 
 ```sh
-git clone --recurse-submodules https://github.com/WhiteHades/baca.git
-cd baca
+git clone --recurse-submodules https://github.com/whitehades/mereader-tui.git
+cd mereader-tui
 rustup toolchain install 1.97.0 --profile minimal
 ```
 
-if you already cloned without submodules, run:
+if the repository was cloned without submodules, run:
 
 ```sh
 git submodule update --init --recursive
@@ -65,50 +83,55 @@ make doctor
 make
 make user-install
 hash -r
-baca --doctor
+mereader-tui --doctor
 ```
 
-make sure `~/.local/bin` is in `PATH`. use `sudo make install` instead for a system-wide install under `/usr/local`.
+make sure `~/.local/bin` is in `PATH`. use `sudo make install` for a system-wide install under `/usr/local`.
 
-the install includes `baca`, `libfff_c.so`, the default config, the `baca(1)` manual, and fff's license. rust is needed to build from source, but it is not needed to run an installed build.
+the install contains `mereader-tui`, `libfff_c.so`, the default config, the `mereader-tui(1)` manual, and both project licenses. rust is needed to build from source, but not to run an installed build.
 
-uninstall with `make user-uninstall` or `sudo make uninstall`. personal config, history, bookmarks, and cached books are not deleted.
+uninstall with `make user-uninstall` or `sudo make uninstall`. uninstalling does not delete personal config, history, bookmarks, or cached books.
 
 ## usage
 
 ```sh
-baca                              # open the library
-baca book.epub                    # open a local book
-baca "path with spaces/book.pdf" # quoted paths work
-baca https://example.com/book.epub
-baca -r                           # print reading history
-baca 3                            # open history row 3
-baca alice wonderland             # fuzzy-match history
-baca --doctor                     # check the installation
+mereader-tui                              # open the library
+mereader-tui book.epub                    # open a local book
+mereader-tui "path with spaces/book.pdf" # quoted paths work
+mereader-tui https://example.com/book.epub
+mereader-tui -r                           # print reading history
+mereader-tui 3                            # open history row 3
+mereader-tui alice wonderland             # fuzzy-match history
+mereader-tui --doctor                     # print runtime diagnostics
 ```
 
-run `man baca` for the complete command reference.
+run `man mereader-tui` for the complete command reference.
 
 ## library
 
-set `LibraryPath` in `~/.config/baca/config.ini` to a calibre library or an ordinary folder of books. `LibraryPath = auto` checks `~/Calibre Library` and `~/Documents/Calibre Library`. `BACA_LIBRARY_PATH` overrides the config for one process.
+set `LibraryPath` in `~/.config/mereader-tui/config.ini` to a calibre library or an ordinary folder of books. `LibraryPath = auto` checks `~/Calibre Library` and `~/Documents/Calibre Library`. `MEREADER_TUI_LIBRARY_PATH` overrides the config for one process.
 
-a folder containing `metadata.db` is treated as a calibre library. baca displays authors first, then their books. ordinary folders display books directly. files with the same stem are grouped as formats of one book.
+a folder containing `metadata.db` is treated as a calibre library. the first shelf shows all logical books. the author shelf groups those books by author. ordinary folders use their directory structure as metadata when possible. files with the same stem are grouped as formats of one book.
 
 | key | action |
 | --- | --- |
-| `j`, `k`, arrows | move |
-| `enter`, `l` | open the selected author or book |
-| `/` | fuzzy filter through fff |
-| `a` | switch between authors and all books |
-| `f` | show formats for the selected book |
+| `j`, `k`, arrows | move the selection |
+| `ctrl-f`, `ctrl-b`, page keys | move by one screen |
+| `gg`, `G` | select the first or last item |
+| `enter`, `l` | open the selected item |
+| `/` | filter the current shelf through fff |
+| `space space` | find any book with a cover and details preview |
+| `v` | switch between list and card views |
+| `a` | switch between all books and authors |
+| `f` | choose a format for the selected book |
 | `backspace`, `esc`, `h` | go back or clear the filter |
 | `s` | cycle recent, title, and author sorting |
 | `r` | rescan the library |
 | `o` | open a path or url |
+| `?` | show library help |
 | `q` | quit |
 
-epub is preferred over pdf, mobi/azw, and other supported formats. press `f` when you need a specific format.
+epub is preferred over pdf, mobi or azw, and other supported formats. press `f` to choose a different format. that choice is saved for the book.
 
 ## reader
 
@@ -117,21 +140,22 @@ epub is preferred over pdf, mobi/azw, and other supported formats. press `f` whe
 | `j`, `k`, arrows | scroll |
 | `ctrl-f`, `ctrl-b`, page keys | move by pages |
 | `gg`, `G` | jump to the beginning or end |
-| `/`, `?` | search forward or backward |
-| `n`, `N` | repeat search |
+| `/`, `f2` | search forward or backward |
+| `n`, `N` | repeat the search |
 | `ctrl-o`, `ctrl-i` | move through jump history |
 | `tab` | open the table of contents |
 | `b`, `B` | save or list bookmarks |
 | `M` | show metadata |
 | `v` | switch pdf fixed and reflow views |
-| `f1` | show all configured keys |
+| `?`, `f1` | show all configured keys |
+| `f12` | save the current terminal view as svg |
 | `q`, `esc` | cancel or quit |
 
 numeric prefixes repeat movement commands, such as `12j`, `3n`, or `120G`.
 
 ## config
 
-baca creates `~/.config/baca/config.ini` on first use. the important defaults are:
+mereader-tui creates `~/.config/mereader-tui/config.ini` on first use. these are the main defaults:
 
 ```ini
 [General]
@@ -144,7 +168,7 @@ PageScrollDuration = 0.2
 ImageMode = auto
 
 [Color Dark]
-Background = #1e1e2e
+Background = #1d1c2b
 Foreground = #cdd6f4
 Accent = #cba6f7
 
@@ -154,13 +178,21 @@ Foreground = #4c4f69
 Accent = #8839ef
 ```
 
-the shipped colors are catppuccin mocha and latte. see `resources/config.ini` for every key mapping.
+the shipped palette is based on catppuccin mocha and latte. see `resources/config.ini` for every key mapping.
+
+## upgrading from baca
+
+version 0.1.1 imports legacy state once. it copies `config.ini` from the former config directory, imports `baca.db`, and copies cached downloads from the former cache directory. existing files in the new `mereader-tui` directories always win. current mereader-tui state directories are kept in owner-only mode when migration state is checked.
+
+the import does not change or delete legacy state. it writes `.mereader-tui-legacy-state-import-v1.complete` under the xdg config base after a successful import. a persistent `.mereader-tui-legacy-state-import-v1.lock` file under the xdg cache base coordinates concurrent starts. the old files can be kept for recovery or removed by hand after the new state is checked.
+
+the command is now only `mereader-tui`. no `baca` command alias is installed. `make install` and `make user-install` remove files installed by the previous name under the same prefix. replace `BACA_LIBRARY_PATH` with `MEREADER_TUI_LIBRARY_PATH`; the old variable is ignored.
 
 ## native fff integration
 
-baca is written in c23. fff remains rust and is compiled from the pinned submodule into `libfff_c.so`. baca calls fff's c abi directly in the same process; it does not launch an fff command or require neovim.
+mereader-tui is written in c23. fff remains rust and is compiled from the pinned submodule into `libfff_c.so`. mereader-tui calls the fff c abi in the same process. it does not launch an fff command or need neovim.
 
-the c adapter owns baca's copied paths and scores. rust owns the opaque index and temporary fff results, which are released through fff's matching c destructors.
+the c adapter owns copied paths and scores. rust owns the opaque index and temporary fff results, which are released through matching c destructors.
 
 ## development
 
@@ -170,18 +202,20 @@ make test-gcc      # clean gcc build
 make test-clang    # clean clang build
 make sanitize      # address and undefined behavior sanitizers
 make installcheck  # staged install and uninstall
-make format        # clang-format c sources and headers
+make format        # format c sources and headers
 ```
 
-fff is pinned as a git submodule so builds use a reviewed source revision and a locked cargo dependency graph.
+fff is pinned as a git submodule, so builds use a reviewed source revision and a locked cargo dependency graph.
 
 ## limits
 
-- pdf reflow and search require an embedded text layer
+- kindle print replica and azw4 books are not supported
+- drm-protected mobi or azw files are not supported
+- pdf reflow and search need an embedded text layer
 - password-protected pdfs and encrypted comic archives are not supported
-- document search works on laid-out lines, so a phrase split by wrapping may need a regex such as `word +next`
+- document search works on laid-out lines, so a phrase split by wrapping may need a regular expression such as `word +next`
 - direct image decoding is bounded; oversized or corrupt images remain placeholders
 
 ## license
 
-gpl-3.0. the bundled fff component is mit licensed; its license is installed with baca.
+gpl 3.0. the bundled fff component uses the mit license. both licenses are installed with mereader-tui.

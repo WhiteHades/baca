@@ -75,7 +75,7 @@ static BacaTestResult test_default_path_is_xdg_isolated(void) {
     BacaDatabase database = {0};
     BacaError error = {0};
     TEST_ASSERT_MSG(baca_database_open_default(&database, &error), "%s", error.message);
-    char *expected = baca_test_path("xdg-cache/baca/baca.db");
+    char *expected = baca_test_path("xdg-cache/mereader-tui/mereader-tui.db");
     TEST_ASSERT(expected != NULL);
     TEST_ASSERT_STR(database.path, expected);
     TEST_ASSERT_MSG(baca_database_migrate(&database, &error), "%s", error.message);

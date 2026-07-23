@@ -221,7 +221,7 @@ static BacaTestResult test_image_modes_and_legacy_precedence(void) {
 }
 
 static BacaTestResult test_default_file_creation_is_isolated(void) {
-    char *path = baca_test_path("xdg-config/baca/config.ini");
+    char *path = baca_test_path("xdg-config/mereader-tui/config.ini");
     TEST_ASSERT(path != NULL);
     BacaError error = {0};
     TEST_ASSERT(baca_remove_tree(path, &error));
@@ -253,7 +253,7 @@ static BacaTestResult test_save_library_path_preserves_config(void) {
         "Accent = #abcdef\n"
         "[General]\n"
         "LibraryPath = auto\n";
-    TEST_ASSERT(baca_test_write_text("xdg-config/baca/config.ini", text));
+    TEST_ASSERT(baca_test_write_text("xdg-config/mereader-tui/config.ini", text));
     BacaError error = {0};
     TEST_ASSERT(baca_config_save_library_path("/srv/100% books", &error));
 
@@ -265,7 +265,7 @@ static BacaTestResult test_save_library_path_preserves_config(void) {
     TEST_ASSERT_INT((int)config.dark.accent, 0xabcdef);
     baca_config_free(&config);
 
-    char *path = baca_test_path("xdg-config/baca/config.ini");
+    char *path = baca_test_path("xdg-config/mereader-tui/config.ini");
     TEST_ASSERT(path != NULL);
     struct stat status;
     TEST_ASSERT(stat(path, &status) == 0);

@@ -194,7 +194,7 @@ static char *library_create_epub(const char *relative, const char *title, const 
 static bool library_seed_history(const LibraryPtyEnvironment *environment, const BacaHistoryEntry *entries,
                                  size_t count) {
     BacaError error = {0};
-    char *database_path = baca_path_join(environment->cache, "baca/baca.db", &error);
+    char *database_path = baca_path_join(environment->cache, "mereader-tui/mereader-tui.db", &error);
     char *directory = database_path == NULL ? NULL : baca_path_dirname(database_path, &error);
     BacaDatabase database = {0};
     bool seeded = database_path != NULL && directory != NULL && baca_mkdirs(directory, &error) &&
@@ -213,7 +213,7 @@ static bool library_seed_history(const LibraryPtyEnvironment *environment, const
 
 static bool library_configure_root(const LibraryPtyEnvironment *environment, const char *root) {
     BacaError error = {0};
-    char *path = baca_path_join(environment->config, "baca/config.ini", &error);
+    char *path = baca_path_join(environment->config, "mereader-tui/config.ini", &error);
     char *directory = path == NULL ? NULL : baca_path_dirname(path, &error);
     BacaString text = {0};
     const bool ready = path != NULL && directory != NULL && baca_mkdirs(directory, &error) &&
@@ -239,7 +239,7 @@ static bool library_configure_root_with_mode(const LibraryPtyEnvironment *enviro
         return false;
     }
     BacaError error = {0};
-    char *path = baca_path_join(environment->config, "baca/config.ini", &error);
+    char *path = baca_path_join(environment->config, "mereader-tui/config.ini", &error);
     FILE *file = path == NULL ? NULL : fopen(path, "ab");
     bool written = false;
     if (file != NULL) {
@@ -252,7 +252,7 @@ static bool library_configure_root_with_mode(const LibraryPtyEnvironment *enviro
 
 static bool library_database_execute(const LibraryPtyEnvironment *environment, const char *sql) {
     BacaError error = {0};
-    char *database_path = baca_path_join(environment->cache, "baca/baca.db", &error);
+    char *database_path = baca_path_join(environment->cache, "mereader-tui/mereader-tui.db", &error);
     sqlite3 *database = NULL;
     int status = database_path == NULL ? SQLITE_NOMEM : sqlite3_open(database_path, &database);
     char *message = NULL;
@@ -321,9 +321,9 @@ static bool library_pty_spawn(const LibraryPtyEnvironment *environment, const ch
             (void)setenv("COLORTERM", "truecolor", 1);
         }
         if (path == NULL) {
-            (void)execl("./build/baca", "baca", (char *)NULL);
+            (void)execl("./build/mereader-tui", "mereader-tui", (char *)NULL);
         } else {
-            (void)execl("./build/baca", "baca", path, (char *)NULL);
+            (void)execl("./build/mereader-tui", "mereader-tui", path, (char *)NULL);
         }
         _exit(127);
     }
@@ -1001,7 +1001,7 @@ static bool run_pty_empty_library(void) {
                     library_pty_send_text(&process, "q") &&
                     library_pty_wait_exit(&process) && WIFEXITED(process.status) && WEXITSTATUS(process.status) == 0;
     if (success) {
-        char *config = baca_path_join(environment.config, "baca/config.ini", &error);
+        char *config = baca_path_join(environment.config, "mereader-tui/config.ini", &error);
         BacaBuffer contents = {0};
         success = config != NULL && baca_read_file(config, &contents, &error) &&
                   strstr((const char *)contents.data, root) != NULL;
@@ -1536,7 +1536,7 @@ static bool run_pty_calibre_navigation(void) {
     bool success = fixtures && root != NULL && library_pty_environment_init("calibre", &environment) &&
                     library_configure_root(&environment, root) &&
                     library_pty_spawn(&environment, "xterm-256color", 14U, 80U, NULL, &process) &&
-                    library_pty_wait_for(&process, "baca / all books") &&
+                    library_pty_wait_for(&process, "mereader-tui / all books") &&
                     library_pty_wait_for(&process, "First Book [EPUB +1]") &&
                     library_pty_settle(&process) &&
                     library_pty_screen_line_matches(&process, 14U, 80U, "? help", NULL);
@@ -1546,13 +1546,13 @@ static bool run_pty_calibre_navigation(void) {
                   library_pty_send_text(&process, "jjjjjjjjjjjjjjjj") &&
                   library_pty_wait_for(&process, "space space") && library_pty_send_text(&process, "?") &&
                   library_pty_settle(&process) &&
-                  library_pty_screen_line_matches(&process, 14U, 80U, "baca / all books", NULL);
+                  library_pty_screen_line_matches(&process, 14U, 80U, "mereader-tui / all books", NULL);
     }
     if (success) {
         library_pty_clear_output(&process);
         success = library_pty_send_text(&process, "v") &&
                   library_pty_wait_for(&process, " / card") && library_pty_settle(&process) &&
-                  library_pty_screen_line_matches(&process, 14U, 80U, "baca / all books / card", NULL) &&
+                  library_pty_screen_line_matches(&process, 14U, 80U, "mereader-tui / all books / card", NULL) &&
                   library_pty_wait_for(&process, "formats  EPUB  PDF") &&
                   library_pty_send_text(&process, "v  First") &&
                   library_pty_wait_for(&process, "find a book") && library_pty_settle(&process) &&
@@ -1564,34 +1564,34 @@ static bool run_pty_calibre_navigation(void) {
         success = library_pty_send_text(&process, "\n") &&
                   library_pty_wait_for(&process, "CALIBRE EPUB BODY") &&
                   library_pty_send_text(&process, "q") &&
-                  library_pty_wait_for(&process, "baca / all books") &&
+                  library_pty_wait_for(&process, "mereader-tui / all books") &&
                   library_pty_send_text(&process, "a") &&
                   library_pty_wait_for(&process, "uthors") && library_pty_settle(&process) &&
-                  library_pty_screen_line_matches(&process, 14U, 80U, "baca / authors", NULL) &&
+                  library_pty_screen_line_matches(&process, 14U, 80U, "mereader-tui / authors", NULL) &&
                   library_pty_wait_for(&process, "Alice Writer");
     }
     if (success) {
         success = library_pty_send_text(&process, "\n") &&
                   library_pty_wait_for(&process, "First Book [EPUB +1]") && library_pty_settle(&process) &&
-                  library_pty_screen_line_matches(&process, 14U, 80U, "baca / authors / Alice Writer", NULL);
+                  library_pty_screen_line_matches(&process, 14U, 80U, "mereader-tui / authors / Alice Writer", NULL);
     }
     if (success) {
         success = library_pty_send_text(&process, "f") &&
                   library_pty_wait_for(&process, "First Book [PDF]") && library_pty_settle(&process) &&
-                  library_pty_screen_line_matches(&process, 14U, 80U, "baca / formats / First Book", NULL) &&
+                  library_pty_screen_line_matches(&process, 14U, 80U, "mereader-tui / formats / First Book", NULL) &&
                   library_pty_screen_line_matches(&process, 14U, 80U, "First Book [EPUB]", NULL) &&
                   library_pty_screen_line_matches(&process, 14U, 80U, "First Book [PDF]", NULL);
     }
     if (success) {
         static const char backspace = 127;
         success = library_pty_send(&process, &backspace, 1U) && library_pty_settle(&process) &&
-                  library_pty_screen_line_matches(&process, 14U, 80U, "baca / authors / Alice Writer", NULL) &&
+                  library_pty_screen_line_matches(&process, 14U, 80U, "mereader-tui / authors / Alice Writer", NULL) &&
                   library_pty_send_text(&process, "l") &&
                   library_pty_wait_for(&process, "CALIBRE EPUB BODY");
     }
     if (success) {
         success = library_pty_send_text(&process, "q") && library_pty_settle(&process) &&
-                  library_pty_screen_line_matches(&process, 14U, 80U, "baca / all books", NULL) &&
+                  library_pty_screen_line_matches(&process, 14U, 80U, "mereader-tui / all books", NULL) &&
                   library_pty_send_text(&process, "q") && library_pty_wait_exit(&process) &&
                   WIFEXITED(process.status) && WEXITSTATUS(process.status) == 0;
     }

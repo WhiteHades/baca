@@ -92,7 +92,7 @@ bool baca_database_open_default(BacaDatabase *database, BacaError *error) {
         return false;
     }
 
-    char *path = baca_xdg_cache_path("baca.db", error);
+    char *path = baca_xdg_cache_path(BACA_NAME ".db", error);
     if (path == nullptr) {
         return false;
     }

@@ -2,6 +2,7 @@
 #include "baca/library_tui.h"
 #include "baca/platform.h"
 #include "baca/remote.h"
+#include "baca/state_migration.h"
 
 #include <errno.h>
 #include <getopt.h>
@@ -169,7 +170,8 @@ static int report_error(const BacaError *error) {
 static int print_doctor(void) {
   BacaError error = {0};
   char *config = baca_xdg_config_path("config.ini", &error);
-  char *database = config == NULL ? NULL : baca_xdg_cache_path("baca.db", &error);
+  char *database =
+      config == NULL ? NULL : baca_xdg_cache_path(BACA_NAME ".db", &error);
   char *downloads = database == NULL ? NULL : baca_xdg_cache_path("downloads", &error);
   if (config == NULL || database == NULL || downloads == NULL) {
     free(config);
@@ -179,7 +181,7 @@ static int print_doctor(void) {
   }
 
   const char *mobitool = baca_platform_find_executable("mobitool");
-  puts("Baca Doctor");
+  printf("%s Doctor\n", BACA_NAME);
   printf("Version: %s\n", BACA_VERSION);
   printf("Config: %s\n", config);
   printf("Database: %s\n", database);
@@ -247,7 +249,7 @@ static int print_history(BacaError *error) {
     return report_error(error);
   }
 
-  puts("Baca History");
+  printf("%s History\n", BACA_NAME);
   puts("#\tLast Read\tProgress\tTitle\tAuthor\tPath\tSize");
   for (size_t index = 0; index < history.length; ++index) {
     const BacaHistoryEntry *entry = &history.items[index];
@@ -457,7 +459,7 @@ static bool library_contains_path(const char *root, const char *path) {
 }
 
 static char *resolve_library_root(const BacaConfig *config, BacaError *error) {
-  const char *override = getenv("BACA_LIBRARY_PATH");
+  const char *override = getenv("MEREADER_TUI_LIBRARY_PATH");
   const char *setting = override != NULL && override[0] != '\0'
                             ? override
                             : config->library_path;
@@ -713,6 +715,7 @@ int baca_cli_main(int argc, char **argv) {
   };
 
   bool show_history = false;
+  bool show_doctor = false;
   opterr = 0;
   optind = 0;
   for (;;) {
@@ -728,7 +731,8 @@ int baca_cli_main(int argc, char **argv) {
       printf("v%s\n", BACA_VERSION);
       return EXIT_SUCCESS;
     case 'd':
-      return print_doctor();
+      show_doctor = true;
+      break;
     case 'r':
       show_history = true;
       break;
@@ -739,6 +743,12 @@ int baca_cli_main(int argc, char **argv) {
   }
 
   BacaError error = {0};
+  if (!baca_state_migrate(&error)) {
+    return report_error(&error);
+  }
+  if (show_doctor) {
+    return print_doctor();
+  }
   if (show_history) {
     return print_history(&error);
   }

@@ -2,7 +2,7 @@
 
 set -eu
 
-binary=${1:?usage: cli_test.sh /path/to/baca}
+binary=${1:?usage: cli_test.sh /path/to/mereader-tui}
 root=$PWD/build/test-tmp/cli
 server_pid=
 
@@ -32,74 +32,102 @@ export XDG_CONFIG_HOME="$root/xdg-config"
 export XDG_CACHE_HOME="$root/xdg-cache"
 export TMPDIR="$root/tmp"
 export LC_ALL=C
+unset MEREADER_TUI_LIBRARY_PATH
+
+mkdir -p "$XDG_CONFIG_HOME/baca" "$XDG_CACHE_HOME/baca/downloads"
+printf '[General]\nLibraryPath = auto\n' >"$XDG_CONFIG_HOME/baca/config.ini"
+printf 'legacy download\n' >"$XDG_CACHE_HOME/baca/downloads/legacy.txt"
 
 help_output=$("$binary" --help 2>&1) || fail help
 case $help_output in
-    *"usage: baca"*"TUI ebook reader"*"--doctor"*"--history"*) ;;
+    *"usage: mereader-tui"*"TUI ebook reader"*"--doctor"*"--history"*) ;;
     *) fail help ;;
 esac
+[ ! -e "$XDG_CONFIG_HOME/mereader-tui" ] || fail help_migration
+[ ! -e "$XDG_CACHE_HOME/mereader-tui" ] || fail help_migration
 pass help
 
 version_output=$("$binary" --version 2>&1) || fail version
-[ "$version_output" = "v0.1.0" ] || fail version
+[ "$version_output" = "v0.1.1" ] || fail version
+[ -f "$XDG_CONFIG_HOME/baca/config.ini" ] || fail version_migration
 pass version
+
+if option_output=$("$binary" --definitely-invalid 2>&1); then
+    fail unknown_option
+fi
+case $option_output in
+    *"mereader-tui: unknown option"*) ;;
+    *) fail unknown_option ;;
+esac
+[ -f "$XDG_CONFIG_HOME/baca/config.ini" ] || fail invalid_option_migration
+pass unknown_option
 
 doctor_output=$("$binary" --doctor 2>&1) || fail doctor
 case $doctor_output in
-    *"Baca Doctor"*"Version: 0.1.0"*) ;;
+    *"mereader-tui Doctor"*"Version: 0.1.1"*) ;;
     *) fail doctor ;;
 esac
 case $doctor_output in
-    *"Config: $XDG_CONFIG_HOME/baca/config.ini"*"Database: $XDG_CACHE_HOME/baca/baca.db"*) ;;
+    *"Config: $XDG_CONFIG_HOME/mereader-tui/config.ini"*"Database: $XDG_CACHE_HOME/mereader-tui/mereader-tui.db"*) ;;
     *) fail doctor ;;
 esac
 case $doctor_output in
-    *"Downloads: $XDG_CACHE_HOME/baca/downloads"*"MOBI/AZW:"*) ;;
+    *"Downloads: $XDG_CACHE_HOME/mereader-tui/downloads"*"MOBI/AZW:"*) ;;
     *) fail doctor ;;
 esac
+[ -f "$XDG_CONFIG_HOME/mereader-tui/config.ini" ] || fail doctor_config_migration
+[ -f "$XDG_CONFIG_HOME/baca/config.ini" ] || fail doctor_config_migration
+[ -f "$XDG_CACHE_HOME/mereader-tui/downloads/legacy.txt" ] || fail doctor_download_migration
+[ -f "$XDG_CACHE_HOME/baca/downloads/legacy.txt" ] || fail doctor_download_migration
+[ -f "$XDG_CONFIG_HOME/.mereader-tui-legacy-state-import-v1.complete" ] || fail doctor_migration_marker
 pass doctor
 
+mkdir -p "$XDG_CACHE_HOME/baca"
+: >"$XDG_CACHE_HOME/baca/baca.db"
 history_output=$("$binary" --history 2>&1) || fail history
 case $history_output in
-    "Baca History"*"Last Read"*"Progress"*"Path"*) ;;
+    "mereader-tui History"*"Last Read"*"Progress"*"Path"*) ;;
     *) fail history ;;
 esac
-[ -f "$XDG_CACHE_HOME/baca/baca.db" ] || fail history
+[ -f "$XDG_CACHE_HOME/mereader-tui/mereader-tui.db" ] || fail history
+[ -f "$XDG_CACHE_HOME/baca/baca.db" ] || fail history_migration
 pass history
 
 if ! command -v timeout >/dev/null 2>&1; then
     printf 'SKIP cli.library_default: timeout unavailable\n'
 else
-    library_output=$(printf '\033q' | TERM=xterm-256color timeout 10s "$binary" 2>&1) || fail library_default
+    library_output=$(printf '\033q' |
+        BACA_LIBRARY_PATH="$root/does-not-exist" TERM=xterm-256color timeout 10s "$binary" 2>&1) || fail library_default
     case $library_output in
-        *"baca"*"Paste the path to your book directory"*) ;;
+        *"mereader-tui"*"Paste the path to your book directory"*) ;;
         *) fail library_default ;;
     esac
     pass library_default
+
+    mkdir -p "$root/library"
+    library_override_output=$(printf q |
+        MEREADER_TUI_LIBRARY_PATH="$root/library" TERM=xterm-256color timeout 10s "$binary" 2>&1) ||
+        fail library_override
+    case $library_override_output in
+        *"mereader-tui / all books"*) ;;
+        *) fail library_override ;;
+    esac
+    pass library_override
 fi
 
 if number_output=$("$binary" 1 2>&1); then
     fail missing_history_number
 fi
 case $number_output in
-    *"Baca History"*"history entry #1 not found"*) ;;
+    *"mereader-tui History"*"history entry #1 not found"*) ;;
     *) fail missing_history_number ;;
 esac
 pass missing_history_number
 
-if option_output=$("$binary" --definitely-invalid 2>&1); then
-    fail unknown_option
-fi
-case $option_output in
-    *"baca: unknown option"*) ;;
-    *) fail unknown_option ;;
-esac
-pass unknown_option
-
 if command -v sqlite3 >/dev/null 2>&1; then
     book="$root/control.epub"
     : > "$book"
-    database="$XDG_CACHE_HOME/baca/baca.db"
+    database="$XDG_CACHE_HOME/mereader-tui/mereader-tui.db"
     sqlite3 "$database" \
         "INSERT OR REPLACE INTO reading_history(filepath,title,author,reading_progress,last_read) VALUES("\
 "'$book','Bad'||char(10)||'Title'||char(9)||'Name'||char(27)||'[31m',"\
@@ -147,9 +175,9 @@ PY
     remote_url="$canonical_url#chapter"
     (sleep 2; printf b; sleep 1; printf qq) |
         TERM=xterm-256color timeout 15s "$binary" "$remote_url" >/dev/null 2>&1 || fail remote_open
-    [ "$(sqlite3 "$XDG_CACHE_HOME/baca/baca.db" "SELECT filepath FROM reading_history WHERE filepath = '$canonical_url'")" = "$canonical_url" ] ||
+    [ "$(sqlite3 "$XDG_CACHE_HOME/mereader-tui/mereader-tui.db" "SELECT filepath FROM reading_history WHERE filepath = '$canonical_url'")" = "$canonical_url" ] ||
         fail remote_history_identity
-    [ "$(sqlite3 "$XDG_CACHE_HOME/baca/baca.db" "SELECT filepath FROM bookmarks WHERE filepath = '$canonical_url'")" = "$canonical_url" ] ||
+    [ "$(sqlite3 "$XDG_CACHE_HOME/mereader-tui/mereader-tui.db" "SELECT filepath FROM bookmarks WHERE filepath = '$canonical_url'")" = "$canonical_url" ] ||
         fail remote_bookmark_identity
     kill "$server_pid" 2>/dev/null || :
     wait "$server_pid" 2>/dev/null || :

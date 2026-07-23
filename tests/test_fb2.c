@@ -15,7 +15,7 @@ static const char fb2_fixture[] =
     "<date value='1843'>Eighteen forty-three</date><coverpage><image l:href='#cover.png'/></coverpage>"
     "<lang>en</lang></title-info>"
     "<document-info><author><first-name>Editor</first-name><last-name>One</last-name></author>"
-    "<program-used>Baca Fixture</program-used><date value='2026-07-19'>Today</date>"
+    "<program-used>mereader-tui Fixture</program-used><date value='2026-07-19'>Today</date>"
     "<src-url>https://example.invalid/source</src-url><id>native-fb2-id</id></document-info>"
     "<publish-info><publisher>Example Press</publisher></publish-info></description>"
     "<body><title><p>Native FB2</p></title><section id='chapter-1'><title><p>Chapter One</p></title>"
@@ -51,7 +51,7 @@ static BacaTestResult test_metadata_toc_styles_links_bodies_and_image(void) {
     TEST_ASSERT_STR(document.metadata.creator, "Editor One");
     TEST_ASSERT_STR(document.metadata.description, "A short annotation.");
     TEST_ASSERT_STR(document.metadata.publisher, "Example Press");
-    TEST_ASSERT_STR(document.metadata.producer, "Baca Fixture");
+    TEST_ASSERT_STR(document.metadata.producer, "mereader-tui Fixture");
     TEST_ASSERT_STR(document.metadata.date, "1843");
     TEST_ASSERT_STR(document.metadata.creation_date, "2026-07-19");
     TEST_ASSERT_STR(document.metadata.language, "en");
@@ -159,9 +159,9 @@ static BacaTestResult test_minimal_book_without_images(void) {
 }
 
 static BacaTestResult test_optional_real_fb2(void) {
-    const char *configured = getenv("BACA_TEST_FB2_SAMPLE");
+    const char *configured = getenv("MEREADER_TUI_TEST_FB2_SAMPLE");
     if (configured == NULL || configured[0] == '\0') {
-        return baca_test_skip("set BACA_TEST_FB2_SAMPLE for real FictionBook parsing");
+        return baca_test_skip("set MEREADER_TUI_TEST_FB2_SAMPLE for real FictionBook parsing");
     }
     BacaError error = {0};
     char *path = baca_realpath(configured, &error);

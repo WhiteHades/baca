@@ -34,7 +34,7 @@ static void remove_temp_directory(const char *path) {
 }
 
 static bool make_private_temp(char **directory, BacaError *error) {
-    char *path = baca_make_temp_directory("baca-mobi-", error);
+    char *path = baca_make_temp_directory(BACA_NAME "-mobi-", error);
     if (path == NULL) {
         return false;
     }
@@ -466,7 +466,8 @@ static bool diagnostics_indicate_replica(const char *diagnostics) {
 static void set_extraction_error(const char *diagnostics, int status, bool missing_epub, BacaError *error) {
     if (diagnostics_indicate_drm(diagnostics)) {
         baca_error_set(error, BACA_ERROR_UNSUPPORTED,
-                       "this MOBI/AZW book is DRM protected; baca cannot decrypt protected Kindle books");
+                       "this MOBI/AZW book is DRM protected; %s cannot decrypt protected Kindle books",
+                       BACA_NAME);
         return;
     }
     if (diagnostics_indicate_replica(diagnostics)) {

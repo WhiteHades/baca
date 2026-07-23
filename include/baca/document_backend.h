@@ -12,7 +12,7 @@
 [[nodiscard]] bool baca_pdf_open(BacaDocument *document, const char *path, BacaError *error);
 [[nodiscard]] bool baca_image_open(BacaDocument *document, const char *path,
                                    const struct stat *expected_identity, BacaError *error);
-/* destination must not exist and must be inside a caller-owned Baca temporary directory. */
+/* destination must not exist and must be inside a caller-owned temporary directory. */
 [[nodiscard]] bool baca_image_export_original(const BacaDocument *document, const char *destination,
                                               BacaError *error);
 [[nodiscard]] bool baca_comic_open(BacaDocument *document, const char *path,

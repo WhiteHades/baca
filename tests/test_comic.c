@@ -323,9 +323,9 @@ static BacaTestResult test_in_place_archive_mutation_is_rejected(void) {
 }
 
 static BacaTestResult test_optional_real_cbr(void) {
-    const char *configured = getenv("BACA_TEST_CBR_SAMPLE");
+    const char *configured = getenv("MEREADER_TUI_TEST_CBR_SAMPLE");
     if (configured == NULL || configured[0] == '\0') {
-        return baca_test_skip("set BACA_TEST_CBR_SAMPLE for real RAR decoding");
+        return baca_test_skip("set MEREADER_TUI_TEST_CBR_SAMPLE for real RAR decoding");
     }
     BacaError error = {0};
     char *path = baca_realpath(configured, &error);

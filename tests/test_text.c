@@ -99,7 +99,7 @@ static bool run_vim_navigation_pty(BacaString *output, unsigned *stage) {
     }
     const bool prepared =
         baca_test_write_text("text/vim/reader.txt", fixture.data) &&
-        baca_test_write_text("text/vim/config/baca/config.ini", "[General]\nMaxTextWidth=40\nPageScrollDuration=0\n"
+        baca_test_write_text("text/vim/config/mereader-tui/config.ini", "[General]\nMaxTextWidth=40\nPageScrollDuration=0\n"
                                                                 "ImageMode=placeholder\n") &&
         baca_test_mkdir("text/vim/cache");
     baca_string_free(&fixture);
@@ -134,7 +134,7 @@ static bool run_vim_navigation_pty(BacaString *output, unsigned *stage) {
         (void)setenv("XDG_CACHE_HOME", cache, 1);
         (void)unsetenv("TERM_PROGRAM");
         (void)unsetenv("KITTY_WINDOW_ID");
-        (void)execl("./build/baca", "baca", path, (char *)NULL);
+        (void)execl("./build/mereader-tui", "mereader-tui", path, (char *)NULL);
         _exit(127);
     }
 

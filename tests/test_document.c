@@ -507,7 +507,7 @@ static bool build_epub2(char **path) {
         "<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"2.0\" unique-identifier=\"book-id\">"
         "<metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">"
         "<dc:title>Harness Book</dc:title><dc:creator>Test Author</dc:creator>"
-        "<dc:description>Generated locally</dc:description><dc:publisher>Baca Tests</dc:publisher>"
+        "<dc:description>Generated locally</dc:description><dc:publisher>mereader-tui Tests</dc:publisher>"
         "<dc:date>2026-07-18</dc:date><dc:language>en</dc:language><dc:format>EPUB</dc:format>"
         "<dc:identifier id=\"book-id\">urn:test:epub2</dc:identifier><dc:source>fixture</dc:source>"
         "</metadata><manifest>"
@@ -575,7 +575,7 @@ static BacaTestResult test_epub2_normalization_toc_resources_and_cleanup(void) {
     TEST_ASSERT_STR(document.metadata.title, "Harness Book");
     TEST_ASSERT_STR(document.metadata.creator, "Test Author");
     TEST_ASSERT_STR(document.metadata.description, "Generated locally");
-    TEST_ASSERT_STR(document.metadata.publisher, "Baca Tests");
+    TEST_ASSERT_STR(document.metadata.publisher, "mereader-tui Tests");
     TEST_ASSERT_STR(document.metadata.date, "2026-07-18");
     TEST_ASSERT_STR(document.metadata.language, "en");
     TEST_ASSERT_STR(document.metadata.format, "EPUB");
@@ -972,7 +972,7 @@ static BacaTestResult test_standalone_snapshot_survives_replacement_and_mutation
     TEST_ASSERT_INT(document.blocks[0].value.image.intrinsic_height, 1);
 
     TEST_ASSERT(unlink(held_path) == 0);
-    char *export_directory = baca_make_temp_directory("baca-image-test-", &error);
+    char *export_directory = baca_make_temp_directory("mereader-tui-image-test-", &error);
     TEST_ASSERT_MSG(export_directory != NULL, "%s", error.message);
     char *export_path = baca_path_join(export_directory, "stable-snapshot.png", &error);
     TEST_ASSERT(export_path != NULL);
@@ -1066,7 +1066,7 @@ static BacaTestResult test_standalone_large_export_streams_held_original(void) {
     TEST_ASSERT(unlink(held_path) == 0);
     TEST_ASSERT(baca_write_file(path, pixel_png, sizeof(pixel_png), &error));
 
-    char *directory = baca_make_temp_directory("baca-image-large-test-", &error);
+    char *directory = baca_make_temp_directory("mereader-tui-image-large-test-", &error);
     TEST_ASSERT_MSG(directory != NULL, "%s", error.message);
     char *destination = baca_path_join(directory, "large-export.bmp", &error);
     TEST_ASSERT(destination != NULL);
@@ -1107,7 +1107,7 @@ static BacaTestResult test_standalone_export_cap_and_partial_cleanup(void) {
     BacaError error = {0};
     BacaDocument over_cap = {0};
     TEST_ASSERT_MSG(baca_document_open(&over_cap, over_cap_path, &error), "%s", error.message);
-    char *directory = baca_make_temp_directory("baca-image-cap-test-", &error);
+    char *directory = baca_make_temp_directory("mereader-tui-image-cap-test-", &error);
     TEST_ASSERT_MSG(directory != NULL, "%s", error.message);
     char *destination = baca_path_join(directory, "over-cap.bmp", &error);
     TEST_ASSERT(destination != NULL);
@@ -1132,7 +1132,7 @@ static BacaTestResult test_standalone_export_cap_and_partial_cleanup(void) {
     TEST_ASSERT(close(source) == 0);
     BacaDocument partial = {0};
     TEST_ASSERT_MSG(baca_document_open(&partial, partial_path, &error), "%s", error.message);
-    directory = baca_make_temp_directory("baca-image-partial-test-", &error);
+    directory = baca_make_temp_directory("mereader-tui-image-partial-test-", &error);
     TEST_ASSERT_MSG(directory != NULL, "%s", error.message);
     destination = baca_path_join(directory, "partial.bmp", &error);
     TEST_ASSERT(destination != NULL);
@@ -1600,11 +1600,12 @@ static char *configured_mobitool_path(const char *configured) {
 }
 
 static BacaTestResult test_optional_real_mobi(void) {
-    const char *configured_tool = getenv("BACA_TEST_MOBITOOL");
-    const char *configured_sample = getenv("BACA_TEST_MOBI_SAMPLE");
+    const char *configured_tool = getenv("MEREADER_TUI_TEST_MOBITOOL");
+    const char *configured_sample = getenv("MEREADER_TUI_TEST_MOBI_SAMPLE");
     if (configured_tool == NULL || configured_tool[0] == '\0' || configured_sample == NULL ||
         configured_sample[0] == '\0') {
-        return baca_test_skip("set BACA_TEST_MOBITOOL and BACA_TEST_MOBI_SAMPLE for real conversion");
+        return baca_test_skip(
+            "set MEREADER_TUI_TEST_MOBITOOL and MEREADER_TUI_TEST_MOBI_SAMPLE for real conversion");
     }
     char *tool = configured_mobitool_path(configured_tool);
     BacaError error = {0};
@@ -1628,17 +1629,17 @@ static BacaTestResult test_optional_real_mobi(void) {
     TEST_ASSERT(baca_string_append(&path_value, old_path, &error));
     TEST_ASSERT(setenv("PATH", path_value.data, 1) == 0);
 
-    size_t before = baca_test_count_directories("tmp", "baca-mobi-");
+    size_t before = baca_test_count_directories("tmp", "mereader-tui-mobi-");
     TEST_ASSERT(before != SIZE_MAX);
     BacaDocument document = {0};
     TEST_ASSERT_MSG(baca_document_open(&document, sample, &error), "%s", error.message);
-    size_t during = baca_test_count_directories("tmp", "baca-mobi-");
+    size_t during = baca_test_count_directories("tmp", "mereader-tui-mobi-");
     TEST_ASSERT_SIZE(during, before + 1U);
     TEST_ASSERT(document.format == BACA_FORMAT_MOBI || document.format == BACA_FORMAT_AZW);
     TEST_ASSERT(document.block_count > 0U && document.section_count > 0U);
     TEST_ASSERT(document.metadata.title != NULL || document.metadata.creator != NULL);
     baca_document_close(&document);
-    TEST_ASSERT_SIZE(baca_test_count_directories("tmp", "baca-mobi-"), before);
+    TEST_ASSERT_SIZE(baca_test_count_directories("tmp", "mereader-tui-mobi-"), before);
     TEST_ASSERT(setenv("PATH", old_path, 1) == 0);
     baca_string_free(&path_value);
     free(old_path);

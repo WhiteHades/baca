@@ -32,7 +32,11 @@ static bool remote_write_all(int descriptor, const char *data, size_t length) {
 
 static void remote_server_respond(int client, const char *request) {
     static const char body[] = "remote text\n";
-    if (strstr(request, "GET /plain ") != NULL) {
+    if (strstr(request, "\r\nUser-Agent: mereader-tui/0.1.1\r\n") == NULL) {
+        static const char response[] =
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        (void)remote_write_all(client, response, sizeof(response) - 1U);
+    } else if (strstr(request, "GET /plain ") != NULL) {
         static const char header[] =
             "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 12\r\nConnection: close\r\n\r\n";
         (void)remote_write_all(client, header, sizeof(header) - 1U);

@@ -34,6 +34,7 @@ int main(void) {
     size_t pdf_count = 0U;
     size_t remote_count = 0U;
     size_t search_count = 0U;
+    size_t state_migration_count = 0U;
     size_t text_count = 0U;
     const BacaTestCase *common_cases = baca_common_test_cases(&common_count);
     const BacaTestCase *catalog_cases = baca_catalog_test_cases(&catalog_count);
@@ -49,6 +50,7 @@ int main(void) {
     const BacaTestCase *pdf_cases = baca_pdf_test_cases(&pdf_count);
     const BacaTestCase *remote_cases = baca_remote_test_cases(&remote_count);
     const BacaTestCase *search_cases = baca_search_test_cases(&search_count);
+    const BacaTestCase *state_migration_cases = baca_state_migration_test_cases(&state_migration_count);
     const BacaTestCase *text_cases = baca_text_test_cases(&text_count);
     const BacaTestSuite suites[] = {
         {.name = "common", .cases = common_cases, .count = common_count},
@@ -66,6 +68,7 @@ int main(void) {
         {.name = "remote", .cases = remote_cases, .count = remote_count},
         {.name = "search", .cases = search_cases, .count = search_count},
         {.name = "text", .cases = text_cases, .count = text_count},
+        {.name = "state_migration", .cases = state_migration_cases, .count = state_migration_count},
     };
     int result = baca_test_run(suites, BACA_ARRAY_LEN(suites));
     baca_test_support_cleanup();

@@ -1155,20 +1155,24 @@ static void library_draw_frame(BacaLibraryTuiState *state) {
       input_active || state->rows >= 3 ? state->rows - 1 : -1;
   const int content_end = footer_row >= 0 ? footer_row : state->rows;
   if (show_heading) {
-    char heading[512] = "baca / history";
+    char heading[512] = {0};
+    (void)snprintf(heading, sizeof(heading), "%s / history", BACA_NAME);
     if (state->setup_required) {
-      (void)snprintf(heading, sizeof(heading), "baca / set up library");
+      (void)snprintf(heading, sizeof(heading), "%s / set up library",
+                     BACA_NAME);
     } else if (state->catalog != NULL) {
       if (state->mode == BACA_LIBRARY_SHELF_AUTHORS) {
-        (void)snprintf(heading, sizeof(heading), "baca / authors");
+        (void)snprintf(heading, sizeof(heading), "%s / authors", BACA_NAME);
       } else if (state->mode == BACA_LIBRARY_SHELF_ALL) {
-        (void)snprintf(heading, sizeof(heading), "baca / all books%s",
-                       state->detail_view ? " / card" : "");
+        (void)snprintf(heading, sizeof(heading), "%s / all books%s",
+                       BACA_NAME, state->detail_view ? " / card" : "");
       } else if (state->mode == BACA_LIBRARY_SHELF_BOOKS) {
-        (void)snprintf(heading, sizeof(heading), "baca / authors / %s",
+        (void)snprintf(heading, sizeof(heading), "%s / authors / %s",
+                       BACA_NAME,
                        state->author == NULL ? "unknown" : state->author);
       } else if (state->format_book < state->catalog->length) {
-        (void)snprintf(heading, sizeof(heading), "baca / formats / %s",
+        (void)snprintf(heading, sizeof(heading), "%s / formats / %s",
+                       BACA_NAME,
                        state->catalog->books[state->format_book].title);
       }
     }

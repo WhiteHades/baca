@@ -352,7 +352,7 @@ static bool graphics_screenshot_contains(const char *directory,
       break;
     }
     const size_t length = strlen(entry->d_name);
-    if (length < 9U || strncmp(entry->d_name, "baca_", 5U) != 0 ||
+    if (length < 17U || strncmp(entry->d_name, "mereader-tui_", 13U) != 0 ||
         strcmp(entry->d_name + length - 4U, ".svg") != 0) {
       continue;
     }
@@ -376,8 +376,8 @@ static bool graphics_screenshot_contains(const char *directory,
 static bool run_tui_pty_capture(BacaImageMode mode, unsigned short columns,
                                  const char *marker, BacaString *output) {
   const char *config_relative = mode == BACA_IMAGE_MODE_KITTY
-                                    ? "tui-pty/kitty/baca/config.ini"
-                                    : "tui-pty/ansi/baca/config.ini";
+                                     ? "tui-pty/kitty/mereader-tui/config.ini"
+                                     : "tui-pty/ansi/mereader-tui/config.ini";
   const char *config_text =
       mode == BACA_IMAGE_MODE_KITTY
           ? columns > BACA_GRAPHICS_MAX_COLUMNS
@@ -420,7 +420,7 @@ static bool run_tui_pty_capture(BacaImageMode mode, unsigned short columns,
       (void)unsetenv("KITTY_WINDOW_ID");
     }
     (void)setenv("XDG_CONFIG_HOME", config_root, 1);
-    (void)execl("./build/baca", "baca", image_path, (char *)NULL);
+    (void)execl("./build/mereader-tui", "mereader-tui", image_path, (char *)NULL);
     _exit(127);
   }
   free(image_path);
@@ -459,6 +459,9 @@ static bool run_tui_pty_capture(BacaImageMode mode, unsigned short columns,
     }
     if (waited < 0) {
       break;
+    }
+    if ((descriptor.revents & POLLHUP) != 0) {
+      (void)poll(NULL, 0U, 20);
     }
   }
   if (!completed) {
@@ -1331,7 +1334,7 @@ static BacaTestResult test_tui_tall_standalone_placeholder_and_stable_click(void
   TEST_ASSERT(baca_test_write("tui-tall/image @.svg", graphics_tall_svg,
                               sizeof(graphics_tall_svg) - 1U));
   TEST_ASSERT(baca_test_write_text(
-      "tui-tall/config/baca/config.ini",
+      "tui-tall/config/mereader-tui/config.ini",
       "[General]\nImageMode=kitty\nPreferredImageViewer=capture-viewer\n"
       "MaxTextWidth=80\nPageScrollDuration=0\n"
       "[Keymaps]\nScreenshot=s\n"));
@@ -1372,7 +1375,7 @@ static BacaTestResult test_tui_tall_standalone_placeholder_and_stable_click(void
     (void)setenv("BACA_IMAGE_PTY_HELD_PATH", held_path, 1);
     (void)setenv("BACA_IMAGE_PTY_SCREENSHOT_DIR", screenshot_directory, 1);
     (void)setenv("BACA_IMAGE_PTY_OPEN_FD", descriptor, 1);
-    (void)execl("./build/tests/test_baca", "test_baca", (char *)NULL);
+    (void)execl("./build/tests/test_mereader_tui", "test_mereader_tui", (char *)NULL);
     _exit(127);
   }
 
@@ -1434,7 +1437,7 @@ static BacaTestResult test_tui_tall_standalone_placeholder_and_stable_click(void
                                        ? -1
                                        : snprintf(export_prefix,
                                                   sizeof(export_prefix),
-                                                  "%s/baca-image-",
+                                                   "%s/mereader-tui-image-",
                                                   temporary_root);
   const char *target_basename = target == NULL ? NULL : strrchr(target, '/');
   target_basename = target_basename == NULL ? target : target_basename + 1;
@@ -1493,6 +1496,9 @@ static BacaTestResult test_tui_tall_standalone_placeholder_and_stable_click(void
     if (waited < 0) {
       ok = false;
       break;
+    }
+    if ((poll_descriptor.revents & POLLHUP) != 0) {
+      (void)poll(NULL, 0U, 20);
     }
   }
   if (!completed) {
