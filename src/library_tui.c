@@ -1,5 +1,6 @@
 #include "mereader-tui/library_tui.h"
 #include "mereader-tui/graphics.h"
+#include "mereader-tui/keymap.h"
 #include "mereader-tui/library_shelf.h"
 #include "terminal_runtime.h"
 #include "text_input.h"
@@ -29,6 +30,30 @@ typedef enum MereaderTuiLibraryInputKind {
   MEREADER_TUI_LIBRARY_INPUT_PATH,
   MEREADER_TUI_LIBRARY_INPUT_ROOT,
 } MereaderTuiLibraryInputKind;
+
+typedef enum MereaderTuiLibraryKeyAction {
+  MEREADER_TUI_LIBRARY_KEY_NONE = 0,
+  MEREADER_TUI_LIBRARY_KEY_MOVE_DOWN,
+  MEREADER_TUI_LIBRARY_KEY_MOVE_UP,
+  MEREADER_TUI_LIBRARY_KEY_PAGE_DOWN,
+  MEREADER_TUI_LIBRARY_KEY_PAGE_UP,
+  MEREADER_TUI_LIBRARY_KEY_FIRST,
+  MEREADER_TUI_LIBRARY_KEY_LAST,
+  MEREADER_TUI_LIBRARY_KEY_OPEN,
+  MEREADER_TUI_LIBRARY_KEY_BACK,
+  MEREADER_TUI_LIBRARY_KEY_TOGGLE_VIEW,
+  MEREADER_TUI_LIBRARY_KEY_TOGGLE_SHELF,
+  MEREADER_TUI_LIBRARY_KEY_CHOOSE_FORMAT,
+  MEREADER_TUI_LIBRARY_KEY_SORT,
+  MEREADER_TUI_LIBRARY_KEY_REFRESH,
+  MEREADER_TUI_LIBRARY_KEY_OPEN_PATH,
+  MEREADER_TUI_LIBRARY_KEY_FILTER,
+  MEREADER_TUI_LIBRARY_KEY_FIND,
+  MEREADER_TUI_LIBRARY_KEY_HELP,
+  MEREADER_TUI_LIBRARY_KEY_CONFIRM,
+  MEREADER_TUI_LIBRARY_KEY_CLOSE,
+  MEREADER_TUI_LIBRARY_KEY_QUIT,
+} MereaderTuiLibraryKeyAction;
 
 typedef struct MereaderTuiLibraryTuiState {
   const MereaderTuiConfig *config;
@@ -77,18 +102,99 @@ typedef struct MereaderTuiLibraryTuiState {
   bool help_open;
   bool picker_open;
   bool setup_required;
-  bool space_pending;
-  bool g_pending;
+  bool sequence_pending;
+  MereaderTuiKey sequence_key;
   bool quit;
   bool dirty;
 } MereaderTuiLibraryTuiState;
 
-static bool library_key_is_enter(bool key_code, int code, wchar_t character);
 static void library_draw_box(int y, int x, int height, int width);
 static void library_ensure_picker_selection_visible(MereaderTuiLibraryTuiState *state);
 
 static int size_to_int(size_t value) {
   return value > (size_t)INT_MAX ? INT_MAX : (int)value;
+}
+
+typedef struct MereaderTuiLibraryKeyEntry {
+  MereaderTuiLibraryKeyAction action;
+  const MereaderTuiKeyList *keys;
+} MereaderTuiLibraryKeyEntry;
+
+static MereaderTuiKey library_key(bool key_code, int code, wchar_t character) {
+  return (MereaderTuiKey){
+      .key_code = key_code,
+      .code = code,
+      .character = character,
+  };
+}
+
+static MereaderTuiLibraryKeyAction library_match_key_entries(
+    MereaderTuiLibraryTuiState *state,
+    const MereaderTuiLibraryKeyEntry *entries, size_t count,
+    const MereaderTuiKey *key) {
+  if (state->sequence_pending) {
+    state->sequence_pending = false;
+    for (size_t index = 0U; index < count; ++index) {
+      if (mereader_tui_key_list_matches_sequence(
+              entries[index].keys, &state->sequence_key, key)) {
+        return entries[index].action;
+      }
+    }
+  }
+  for (size_t index = 0U; index < count; ++index) {
+    if (mereader_tui_key_list_matches(entries[index].keys, key)) {
+      return entries[index].action;
+    }
+  }
+  for (size_t index = 0U; index < count; ++index) {
+    if (mereader_tui_key_list_starts_sequence(entries[index].keys, key)) {
+      state->sequence_key = *key;
+      state->sequence_pending = true;
+      break;
+    }
+  }
+  return MEREADER_TUI_LIBRARY_KEY_NONE;
+}
+
+static MereaderTuiLibraryKeyAction
+library_key_action(MereaderTuiLibraryTuiState *state,
+                   const MereaderTuiKey *key) {
+  const MereaderTuiLibraryKeymaps *maps = &state->config->library_keymaps;
+  const MereaderTuiLibraryKeyEntry entries[] = {
+      {MEREADER_TUI_LIBRARY_KEY_MOVE_DOWN, &maps->move_down},
+      {MEREADER_TUI_LIBRARY_KEY_MOVE_UP, &maps->move_up},
+      {MEREADER_TUI_LIBRARY_KEY_PAGE_DOWN, &maps->page_down},
+      {MEREADER_TUI_LIBRARY_KEY_PAGE_UP, &maps->page_up},
+      {MEREADER_TUI_LIBRARY_KEY_FIRST, &maps->first},
+      {MEREADER_TUI_LIBRARY_KEY_LAST, &maps->last},
+      {MEREADER_TUI_LIBRARY_KEY_OPEN, &maps->open},
+      {MEREADER_TUI_LIBRARY_KEY_BACK, &maps->back},
+      {MEREADER_TUI_LIBRARY_KEY_TOGGLE_VIEW, &maps->toggle_view},
+      {MEREADER_TUI_LIBRARY_KEY_TOGGLE_SHELF, &maps->toggle_shelf},
+      {MEREADER_TUI_LIBRARY_KEY_CHOOSE_FORMAT, &maps->choose_format},
+      {MEREADER_TUI_LIBRARY_KEY_SORT, &maps->sort},
+      {MEREADER_TUI_LIBRARY_KEY_REFRESH, &maps->refresh},
+      {MEREADER_TUI_LIBRARY_KEY_OPEN_PATH, &maps->open_path},
+      {MEREADER_TUI_LIBRARY_KEY_FILTER, &maps->filter},
+      {MEREADER_TUI_LIBRARY_KEY_FIND, &maps->find},
+      {MEREADER_TUI_LIBRARY_KEY_HELP, &maps->help},
+      {MEREADER_TUI_LIBRARY_KEY_CLOSE, &maps->close},
+      {MEREADER_TUI_LIBRARY_KEY_QUIT, &maps->quit},
+  };
+  return library_match_key_entries(state, entries,
+                                   MEREADER_TUI_ARRAY_LEN(entries), key);
+}
+
+static MereaderTuiLibraryKeyAction
+library_modal_key_action(MereaderTuiLibraryTuiState *state,
+                         const MereaderTuiKey *key) {
+  const MereaderTuiLibraryKeymaps *maps = &state->config->library_keymaps;
+  const MereaderTuiLibraryKeyEntry entries[] = {
+      {MEREADER_TUI_LIBRARY_KEY_CONFIRM, &maps->confirm},
+      {MEREADER_TUI_LIBRARY_KEY_CLOSE, &maps->close},
+  };
+  return library_match_key_entries(state, entries,
+                                   MEREADER_TUI_ARRAY_LEN(entries), key);
 }
 
 static void library_add_clipped(WINDOW *window, int y, int x, const char *text,
@@ -728,6 +834,43 @@ static size_t library_input_visible_start(const MereaderTuiTextInput *input,
   return start;
 }
 
+static void library_key_list_label(const MereaderTuiKeyList *keys, char *output,
+                                   size_t capacity) {
+  if (capacity == 0U) {
+    return;
+  }
+  output[0] = '\0';
+  if (keys == NULL) {
+    return;
+  }
+  for (size_t index = 0U; index < keys->length; ++index) {
+    const char *name = mereader_tui_key_display_name(keys->items[index]);
+    const size_t used = strlen(output);
+    if (used >= capacity - 1U) {
+      return;
+    }
+    (void)snprintf(output + used, capacity - used, "%s%s",
+                   index == 0U ? "" : " / ", name);
+  }
+}
+
+static void library_draw_help_hint(MereaderTuiLibraryTuiState *state, int row,
+                                   int x, int width) {
+  const MereaderTuiKeyList *keys = &state->config->library_keymaps.help;
+  if (row < 0 || width < 7 || keys->length == 0U) {
+    return;
+  }
+  char hint[64] = {0};
+  (void)snprintf(hint, sizeof(hint), "%s help",
+                 mereader_tui_key_display_name(keys->items[0]));
+  const int hint_width = size_to_int(strlen(hint));
+  if (hint_width > width) {
+    return;
+  }
+  (void)mvwhline(stdscr, row, x + width - hint_width, ' ', hint_width);
+  library_add_clipped(stdscr, row, x + width - hint_width, hint, hint_width);
+}
+
 static void library_draw_context(MereaderTuiLibraryTuiState *state, int row) {
   if (row < 0 || row >= state->rows || state->columns <= 0) {
     return;
@@ -788,13 +931,7 @@ static void library_draw_context(MereaderTuiLibraryTuiState *state, int row) {
                               width - context_width);
         }
       }
-      if (width >= 10) {
-        const char *help = "? help";
-        const int help_width = size_to_int(strlen(help));
-        (void)mvwhline(stdscr, row, x + width - help_width, ' ', help_width);
-        library_add_clipped(stdscr, row, x + width - help_width, help,
-                            help_width);
-      }
+      library_draw_help_hint(state, row, x, width);
       (void)wattroff(stdscr, A_DIM);
       return;
     }
@@ -826,11 +963,8 @@ static void library_draw_context(MereaderTuiLibraryTuiState *state, int row) {
       }
     }
   }
-  if (state->input_kind == MEREADER_TUI_LIBRARY_INPUT_NONE && width >= 10) {
-    const char *help = "? help";
-    const int help_width = size_to_int(strlen(help));
-    (void)mvwhline(stdscr, row, x + width - help_width, ' ', help_width);
-    library_add_clipped(stdscr, row, x + width - help_width, help, help_width);
+  if (state->input_kind == MEREADER_TUI_LIBRARY_INPUT_NONE) {
+    library_draw_help_hint(state, row, x, width);
   }
   (void)wattroff(stdscr, A_DIM);
 }
@@ -980,10 +1114,18 @@ static void library_draw_picker(MereaderTuiLibraryTuiState *state) {
     }
   }
   if (footer_y >= margin_y && footer_y < margin_y + height) {
+    char confirm[48] = {0};
+    char close[48] = {0};
+    char footer[192] = {0};
+    library_key_list_label(&state->config->library_keymaps.confirm, confirm,
+                           sizeof(confirm));
+    library_key_list_label(&state->config->library_keymaps.close, close,
+                           sizeof(close));
+    (void)snprintf(footer, sizeof(footer),
+                   "type to filter  up/down select  %s open  %s close", confirm,
+                   close);
     (void)wattron(stdscr, A_DIM);
-    library_add_clipped(stdscr, footer_y, inner_x,
-                        "type to filter  up/down select  enter open  esc close",
-                        inner_width);
+    library_add_clipped(stdscr, footer_y, inner_x, footer, inner_width);
     (void)wattroff(stdscr, A_DIM);
   }
   if (search_y >= 0 && search_y < state->rows) {
@@ -1003,35 +1145,40 @@ static void library_draw_picker(MereaderTuiLibraryTuiState *state) {
 }
 
 typedef struct MereaderTuiLibraryHelpLine {
-  const char *key;
+  const MereaderTuiKeyList *keys;
   const char *description;
 } MereaderTuiLibraryHelpLine;
 
 static void library_draw_help(MereaderTuiLibraryTuiState *state) {
-  static const MereaderTuiLibraryHelpLine lines[] = {
-      {.key = NULL, .description = "navigation"},
-      {.key = "j / down", .description = "select the next book"},
-      {.key = "k / up", .description = "select the previous book"},
-      {.key = "gg / home", .description = "select the first book"},
-      {.key = "G / end", .description = "select the last book"},
-      {.key = "ctrl+f / pgdn", .description = "move down one screen"},
-      {.key = "ctrl+b / pgup", .description = "move up one screen"},
-      {.key = "enter / l", .description = "open the selected item"},
-      {.key = "h / backspace", .description = "go back one shelf"},
-      {.key = NULL, .description = "library"},
-      {.key = "v", .description = "switch between list and card view"},
-      {.key = "a", .description = "switch between all books and authors"},
-      {.key = "f", .description = "choose a format for the selected book"},
-      {.key = "s", .description = "change the sort order"},
-      {.key = "r", .description = "rescan the library"},
-      {.key = "o", .description = "open a typed file path"},
-      {.key = NULL, .description = "search"},
-      {.key = "space space", .description = "find any book with preview"},
-      {.key = "/", .description = "filter the current shelf"},
-      {.key = "esc", .description = "close a prompt or clear a filter"},
-      {.key = NULL, .description = "application"},
-      {.key = "?", .description = "open or close this help"},
-      {.key = "q", .description = "quit the library"},
+  const MereaderTuiLibraryKeymaps *maps = &state->config->library_keymaps;
+  const MereaderTuiLibraryHelpLine lines[] = {
+      {.keys = NULL, .description = "navigation"},
+      {.keys = &maps->move_down, .description = "select the next item"},
+      {.keys = &maps->move_up, .description = "select the previous item"},
+      {.keys = &maps->first, .description = "select the first item"},
+      {.keys = &maps->last, .description = "select the last item"},
+      {.keys = &maps->page_down, .description = "move down one screen"},
+      {.keys = &maps->page_up, .description = "move up one screen"},
+      {.keys = &maps->open, .description = "open the selected item"},
+      {.keys = &maps->back, .description = "go back one shelf"},
+      {.keys = NULL, .description = "library"},
+      {.keys = &maps->toggle_view,
+       .description = "switch between list and card view"},
+      {.keys = &maps->toggle_shelf,
+       .description = "switch between all books and authors"},
+      {.keys = &maps->choose_format,
+       .description = "choose a format for the selected book"},
+      {.keys = &maps->sort, .description = "change the sort order"},
+      {.keys = &maps->refresh, .description = "rescan the library"},
+      {.keys = &maps->open_path, .description = "open a typed path or URL"},
+      {.keys = NULL, .description = "search"},
+      {.keys = &maps->find, .description = "find any book with preview"},
+      {.keys = &maps->filter, .description = "filter the current shelf"},
+      {.keys = &maps->close,
+       .description = "close a prompt or clear a filter"},
+      {.keys = NULL, .description = "application"},
+      {.keys = &maps->help, .description = "open or close this help"},
+      {.keys = &maps->quit, .description = "quit the library"},
   };
   const int margin_y = state->rows >= 10 ? 1 : 0;
   const int margin_x = state->columns >= 56 ? 4 : 0;
@@ -1071,7 +1218,7 @@ static void library_draw_help(MereaderTuiLibraryTuiState *state) {
       break;
     }
     const MereaderTuiLibraryHelpLine *line = &lines[index];
-    if (line->key == NULL) {
+    if (line->keys == NULL) {
       (void)wattron(
           stdscr, A_BOLD | (state->colors ? COLOR_PAIR(MEREADER_TUI_PAIR_ACCENT) : 0));
       library_add_clipped(stdscr, content_y + row, inner_x, line->description,
@@ -1080,16 +1227,28 @@ static void library_draw_help(MereaderTuiLibraryTuiState *state) {
           stdscr, A_BOLD | (state->colors ? COLOR_PAIR(MEREADER_TUI_PAIR_ACCENT) : 0));
       continue;
     }
+    char keys[128] = {0};
+    library_key_list_label(line->keys, keys, sizeof(keys));
     (void)wattron(stdscr, A_BOLD);
-    library_add_clipped(stdscr, content_y + row, inner_x, line->key, key_width);
+    library_add_clipped(stdscr, content_y + row, inner_x, keys, key_width);
     (void)wattroff(stdscr, A_BOLD);
     library_add_clipped(stdscr, content_y + row, inner_x + key_width + 1,
                         line->description, inner_width - key_width - 1);
   }
   if (footer_y >= margin_y && footer_y < margin_y + height) {
+    char down[32] = {0};
+    char up[32] = {0};
+    char close[32] = {0};
+    char help[32] = {0};
+    char footer[160] = {0};
+    library_key_list_label(&maps->move_down, down, sizeof(down));
+    library_key_list_label(&maps->move_up, up, sizeof(up));
+    library_key_list_label(&maps->close, close, sizeof(close));
+    library_key_list_label(&maps->help, help, sizeof(help));
+    (void)snprintf(footer, sizeof(footer), "%s / %s scroll  %s / %s close",
+                   down, up, close, help);
     (void)wattron(stdscr, A_DIM);
-    library_add_clipped(stdscr, footer_y, inner_x, "j/k scroll  esc/? close",
-                        inner_width);
+    library_add_clipped(stdscr, footer_y, inner_x, footer, inner_width);
     (void)wattroff(stdscr, A_DIM);
   }
 }
@@ -1156,7 +1315,8 @@ static void library_draw_frame(MereaderTuiLibraryTuiState *state) {
   const int content_end = footer_row >= 0 ? footer_row : state->rows;
   if (show_heading) {
     char heading[512] = {0};
-    (void)snprintf(heading, sizeof(heading), "%s / history", MEREADER_TUI_NAME);
+    (void)snprintf(heading, sizeof(heading), "%s / history%s", MEREADER_TUI_NAME,
+                   state->detail_view ? " / card" : "");
     if (state->setup_required) {
       (void)snprintf(heading, sizeof(heading), "%s / set up library",
                      MEREADER_TUI_NAME);
@@ -1442,7 +1602,6 @@ static void library_open_picker(MereaderTuiLibraryTuiState *state) {
   }
   library_ensure_picker_selection_visible(state);
   state->picker_open = true;
-  state->space_pending = false;
   library_clear_status(state);
   state->dirty = true;
 }
@@ -1470,11 +1629,14 @@ static void library_move_picker_selection(MereaderTuiLibraryTuiState *state,
 
 static void library_handle_picker_key(MereaderTuiLibraryTuiState *state, bool key_code,
                                       int code, wchar_t character) {
-  if (!key_code && character == 27) {
+  const MereaderTuiKey key = library_key(key_code, code, character);
+  const MereaderTuiLibraryKeyAction action =
+      library_modal_key_action(state, &key);
+  if (action == MEREADER_TUI_LIBRARY_KEY_CLOSE) {
     library_close_picker(state);
     return;
   }
-  if (library_key_is_enter(key_code, code, character)) {
+  if (action == MEREADER_TUI_LIBRARY_KEY_CONFIRM) {
     const char *path = library_picker_selected_filepath(state);
     if (path != NULL && path[0] != '\0') {
       library_emit(state, MEREADER_TUI_LIBRARY_COMMAND_OPEN, path);
@@ -1515,18 +1677,16 @@ static void library_handle_picker_key(MereaderTuiLibraryTuiState *state, bool ke
   state->dirty = true;
 }
 
-static bool library_key_is_enter(bool key_code, int code, wchar_t character) {
-  return (key_code && code == KEY_ENTER) ||
-         (!key_code && (character == L'\n' || character == L'\r'));
-}
-
 static void library_handle_input_key(MereaderTuiLibraryTuiState *state, bool key_code,
                                      int code, wchar_t character) {
-  if (!key_code && character == 27) {
+  const MereaderTuiKey key = library_key(key_code, code, character);
+  const MereaderTuiLibraryKeyAction action =
+      library_modal_key_action(state, &key);
+  if (action == MEREADER_TUI_LIBRARY_KEY_CLOSE) {
     library_cancel_input(state);
     return;
   }
-  if (library_key_is_enter(key_code, code, character)) {
+  if (action == MEREADER_TUI_LIBRARY_KEY_CONFIRM) {
     if (state->input_kind == MEREADER_TUI_LIBRARY_INPUT_ROOT) {
       if (state->input.length == 0U) {
         library_copy_status(state, "enter a book directory");
@@ -1665,22 +1825,31 @@ static void library_go_back(MereaderTuiLibraryTuiState *state) {
 
 static void library_handle_key(MereaderTuiLibraryTuiState *state, bool key_code,
                                int code, wchar_t character) {
+  const MereaderTuiKey key = library_key(key_code, code, character);
+  const MereaderTuiLibraryKeymaps *maps = &state->config->library_keymaps;
   if (state->help_open) {
-    if ((!key_code &&
-         (character == 27 || character == L'?' || character == L'q')) ||
-        (key_code && code == KEY_BACKSPACE)) {
+    const MereaderTuiLibraryKeyEntry entries[] = {
+        {MEREADER_TUI_LIBRARY_KEY_CLOSE, &maps->close},
+        {MEREADER_TUI_LIBRARY_KEY_CLOSE, &maps->help},
+        {MEREADER_TUI_LIBRARY_KEY_QUIT, &maps->quit},
+        {MEREADER_TUI_LIBRARY_KEY_MOVE_DOWN, &maps->move_down},
+        {MEREADER_TUI_LIBRARY_KEY_MOVE_DOWN, &maps->page_down},
+        {MEREADER_TUI_LIBRARY_KEY_MOVE_UP, &maps->move_up},
+        {MEREADER_TUI_LIBRARY_KEY_MOVE_UP, &maps->page_up},
+    };
+    const MereaderTuiLibraryKeyAction action = library_match_key_entries(
+        state, entries, MEREADER_TUI_ARRAY_LEN(entries), &key);
+    if (action == MEREADER_TUI_LIBRARY_KEY_CLOSE) {
       state->help_open = false;
       state->dirty = true;
-    } else if ((key_code && code == KEY_DOWN) ||
-               (key_code && code == KEY_NPAGE) ||
-               (!key_code && character == L'j')) {
+    } else if (action == MEREADER_TUI_LIBRARY_KEY_QUIT) {
+      library_emit(state, MEREADER_TUI_LIBRARY_COMMAND_QUIT, NULL);
+    } else if (action == MEREADER_TUI_LIBRARY_KEY_MOVE_DOWN) {
       if (state->help_scroll < SIZE_MAX) {
         ++state->help_scroll;
       }
       state->dirty = true;
-    } else if ((key_code && code == KEY_UP) ||
-               (key_code && code == KEY_PPAGE) ||
-               (!key_code && character == L'k')) {
+    } else if (action == MEREADER_TUI_LIBRARY_KEY_MOVE_UP) {
       if (state->help_scroll > 0U) {
         --state->help_scroll;
       }
@@ -1697,83 +1866,85 @@ static void library_handle_key(MereaderTuiLibraryTuiState *state, bool key_code,
     return;
   }
 
-  if (!key_code && character == L' ') {
-    if (state->space_pending) {
-      library_open_picker(state);
-    } else {
-      state->space_pending = true;
-    }
-    return;
-  }
-  state->space_pending = false;
-
-  if (!key_code && character == L'g') {
-    if (state->g_pending) {
-      state->selected = 0U;
-      state->g_pending = false;
-      library_ensure_selection_visible(state);
-      state->dirty = true;
-    } else {
-      state->g_pending = true;
-    }
-    return;
-  }
-  state->g_pending = false;
-
-  if ((key_code && code == KEY_DOWN) || (!key_code && character == L'j')) {
+  switch (library_key_action(state, &key)) {
+  case MEREADER_TUI_LIBRARY_KEY_MOVE_DOWN:
     library_move_selection(state, 1);
-  } else if ((key_code && code == KEY_UP) || (!key_code && character == L'k')) {
+    break;
+  case MEREADER_TUI_LIBRARY_KEY_MOVE_UP:
     library_move_selection(state, -1);
-  } else if (key_code && code == KEY_HOME) {
+    break;
+  case MEREADER_TUI_LIBRARY_KEY_FIRST:
     state->selected = 0U;
     library_ensure_selection_visible(state);
     state->dirty = true;
-  } else if ((key_code && code == KEY_END) ||
-             (!key_code && character == L'G')) {
+    break;
+  case MEREADER_TUI_LIBRARY_KEY_LAST:
     if (state->view.length > 0U) {
       state->selected = state->view.length - 1U;
       library_ensure_selection_visible(state);
       state->dirty = true;
     }
-  } else if ((key_code && code == KEY_NPAGE) || (!key_code && character == 6)) {
+    break;
+  case MEREADER_TUI_LIBRARY_KEY_PAGE_DOWN:
     library_move_selection(state, size_to_int(library_visible_rows(state)));
-  } else if ((key_code && code == KEY_PPAGE) || (!key_code && character == 2)) {
+    break;
+  case MEREADER_TUI_LIBRARY_KEY_PAGE_UP:
     library_move_selection(state, -size_to_int(library_visible_rows(state)));
-  } else if (library_key_is_enter(key_code, code, character) ||
-             (!key_code && character == L'l')) {
+    break;
+  case MEREADER_TUI_LIBRARY_KEY_OPEN:
     library_open_selected(state);
-  } else if (!key_code && character == L'/') {
+    break;
+  case MEREADER_TUI_LIBRARY_KEY_FILTER:
     library_begin_filter(state);
-  } else if (!key_code && character == L's') {
+    break;
+  case MEREADER_TUI_LIBRARY_KEY_SORT:
     library_cycle_sort(state);
-  } else if (!key_code && character == L'v') {
+    break;
+  case MEREADER_TUI_LIBRARY_KEY_TOGGLE_VIEW:
     state->detail_view = !state->detail_view;
     library_clear_status(state);
     state->dirty = true;
-  } else if (!key_code && character == L'?') {
+    break;
+  case MEREADER_TUI_LIBRARY_KEY_HELP:
     state->help_open = true;
     state->help_scroll = 0U;
     library_clear_status(state);
     state->dirty = true;
-  } else if (!key_code && character == L'r') {
+    break;
+  case MEREADER_TUI_LIBRARY_KEY_REFRESH:
     library_emit(state, MEREADER_TUI_LIBRARY_COMMAND_REFRESH,
                  library_selected_filepath(state));
-  } else if (!key_code && character == L'o') {
+    break;
+  case MEREADER_TUI_LIBRARY_KEY_OPEN_PATH:
     library_begin_path(state);
-  } else if (!key_code && character == L'f' && state->catalog != NULL) {
-    library_open_formats(state);
-  } else if (!key_code && character == L'a' && state->catalog != NULL) {
-    library_change_mode(state,
-                        state->mode == MEREADER_TUI_LIBRARY_SHELF_ALL
-                            ? MEREADER_TUI_LIBRARY_SHELF_AUTHORS
-                            : MEREADER_TUI_LIBRARY_SHELF_ALL,
-                        NULL, 0U);
-  } else if ((key_code && code == KEY_BACKSPACE) ||
-             (!key_code && (character == 8 || character == 127 ||
-                            character == 27 || character == L'h'))) {
+    break;
+  case MEREADER_TUI_LIBRARY_KEY_CHOOSE_FORMAT:
+    if (state->catalog != NULL) {
+      library_open_formats(state);
+    }
+    break;
+  case MEREADER_TUI_LIBRARY_KEY_TOGGLE_SHELF:
+    if (state->catalog != NULL) {
+      library_change_mode(state,
+                          state->mode == MEREADER_TUI_LIBRARY_SHELF_ALL
+                              ? MEREADER_TUI_LIBRARY_SHELF_AUTHORS
+                              : MEREADER_TUI_LIBRARY_SHELF_ALL,
+                          NULL, 0U);
+    }
+    break;
+  case MEREADER_TUI_LIBRARY_KEY_FIND:
+    library_open_picker(state);
+    break;
+  case MEREADER_TUI_LIBRARY_KEY_BACK:
+  case MEREADER_TUI_LIBRARY_KEY_CLOSE:
     library_go_back(state);
-  } else if (!key_code && character == L'q') {
+    break;
+  case MEREADER_TUI_LIBRARY_KEY_QUIT:
     library_emit(state, MEREADER_TUI_LIBRARY_COMMAND_QUIT, NULL);
+    break;
+  case MEREADER_TUI_LIBRARY_KEY_CONFIRM:
+  case MEREADER_TUI_LIBRARY_KEY_NONE:
+    break;
   }
 }
 

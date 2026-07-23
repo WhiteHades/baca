@@ -134,6 +134,8 @@ a folder containing `metadata.db` is treated as a calibre library. the first she
 
 epub is preferred over pdf, mobi or azw, and other supported formats. press `f` to choose a different format. that choice is saved for the book.
 
+library controls are configured separately under `[Library Keymaps]`, so changing reader scrolling never changes library navigation. the library help view and footer show the active mappings. bindings accept named keys such as `pagedown`, chords such as `ctrl+f`, and two-key sequences such as `gg` or `space space`; invalid or conflicting library bindings are rejected with the two option names.
+
 ## reader
 
 | key | action |
@@ -179,7 +181,7 @@ Foreground = #4c4f69
 Accent = #8839ef
 ```
 
-the shipped palette is based on catppuccin mocha and latte. see `resources/config.ini` for every key mapping.
+the shipped palette is based on catppuccin mocha and latte. see `resources/config.ini` for every reader and library key mapping.
 
 ## native fff integration
 

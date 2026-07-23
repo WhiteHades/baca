@@ -2,6 +2,8 @@
 
 #include "mereader-tui/library.h"
 
+#include <cairo.h>
+#include <cairo-pdf.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -191,6 +193,35 @@ static char *library_create_epub(const char *relative, const char *title, const 
     return path;
 }
 
+static char *library_create_pdf(const char *relative, const char *text) {
+    char *path = mereader_tui_test_path(relative);
+    MereaderTuiError error = {0};
+    char *directory = path == NULL ? NULL : mereader_tui_path_dirname(path, &error);
+    if (path == NULL || directory == NULL || !mereader_tui_mkdirs(directory, &error)) {
+        free(directory);
+        free(path);
+        return NULL;
+    }
+    free(directory);
+
+    cairo_surface_t *surface = cairo_pdf_surface_create(path, 400.0, 300.0);
+    cairo_t *context = cairo_create(surface);
+    cairo_select_font_face(context, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(context, 18.0);
+    cairo_move_to(context, 24.0, 48.0);
+    cairo_show_text(context, text);
+    cairo_show_page(context);
+    cairo_destroy(context);
+    cairo_surface_finish(surface);
+    const cairo_status_t status = cairo_surface_status(surface);
+    cairo_surface_destroy(surface);
+    if (status != CAIRO_STATUS_SUCCESS) {
+        free(path);
+        return NULL;
+    }
+    return path;
+}
+
 static bool library_seed_history(const LibraryPtyEnvironment *environment, const MereaderTuiHistoryEntry *entries,
                                  size_t count) {
     MereaderTuiError error = {0};
@@ -248,6 +279,40 @@ static bool library_configure_root_with_mode(const LibraryPtyEnvironment *enviro
     }
     free(path);
     return written;
+}
+
+static bool library_append_config(const LibraryPtyEnvironment *environment, const char *text) {
+    MereaderTuiError error = {0};
+    char *path = mereader_tui_path_join(environment->config, "mereader-tui/config.ini", &error);
+    FILE *file = path == NULL ? NULL : fopen(path, "ab");
+    bool written = false;
+    if (file != NULL) {
+        written = fwrite(text, 1U, strlen(text), file) == strlen(text);
+        written = fclose(file) == 0 && written;
+    }
+    free(path);
+    return written;
+}
+
+static bool library_format_preference_matches(const LibraryPtyEnvironment *environment, const char *root,
+                                              const char *suffix) {
+    MereaderTuiError error = {0};
+    char *database_path = mereader_tui_path_join(environment->cache, "mereader-tui/mereader-tui.db", &error);
+    MereaderTuiDatabase database = {0};
+    MereaderTuiFormatPreferences preferences = {0};
+    bool matches = database_path != NULL && mereader_tui_database_open(&database, database_path, &error) &&
+                   mereader_tui_database_format_preferences(&database, root, &preferences, &error) &&
+                   preferences.length == 1U && preferences.items[0].relative_path != NULL;
+    if (matches) {
+        const size_t path_length = strlen(preferences.items[0].relative_path);
+        const size_t suffix_length = strlen(suffix);
+        matches = suffix_length <= path_length &&
+                  strcmp(preferences.items[0].relative_path + path_length - suffix_length, suffix) == 0;
+    }
+    mereader_tui_format_preferences_free(&preferences);
+    mereader_tui_database_close(&database);
+    free(database_path);
+    return matches;
 }
 
 static bool library_database_execute(const LibraryPtyEnvironment *environment, const char *sql) {
@@ -336,6 +401,11 @@ static bool library_pty_spawn(const LibraryPtyEnvironment *environment, const ch
         return false;
     }
     return true;
+}
+
+static bool library_pty_resize(LibraryPtyProcess *process, unsigned short rows, unsigned short columns) {
+    const struct winsize size = {.ws_row = rows, .ws_col = columns};
+    return process != NULL && process->master >= 0 && ioctl(process->master, TIOCSWINSZ, &size) == 0;
 }
 
 static int64_t library_pty_now_milliseconds(void) {
@@ -1083,6 +1153,151 @@ static MereaderTuiTestResult test_pty_open_return_and_typed_path(void) {
     return MEREADER_TUI_TEST_PASS;
 }
 
+static bool run_pty_custom_library_keymaps(void) {
+    LibraryPtyEnvironment environment = {0};
+    LibraryPtyProcess process = {.master = -1};
+    const char *stage = "startup";
+    char *first = library_create_epub("library-pty/custom-keys/first.epub", "First Key", "Reader", "FIRST KEY BODY");
+    char *second = library_create_epub("library-pty/custom-keys/second.epub", "Second Key", "Reader", "SECOND KEY BODY");
+    MereaderTuiHistoryEntry entries[] = {
+        library_entry(first, "First Key", "Reader", 0.1, "2026-07-20 12:00:00"),
+        library_entry(second, "Second Key", "Reader", 0.2, "2026-07-19 12:00:00"),
+    };
+    static const char keymaps[] =
+        "[Library Keymaps]\n"
+        "MoveDown = x\n"
+        "First = zz\n"
+        "ToggleView = t\n"
+        "Help = HH\n"
+        "Confirm = ee\n"
+        "Close = CC\n"
+        "Quit = Q\n";
+    bool success = first != NULL && second != NULL && library_pty_environment_init("custom-keys", &environment) &&
+                   library_seed_history(&environment, entries, MEREADER_TUI_ARRAY_LEN(entries)) &&
+                   library_configure_root(&environment, "auto") && library_append_config(&environment, keymaps) &&
+                   library_pty_spawn(&environment, "xterm-256color", 12U, 60U, NULL, &process) &&
+                   library_pty_wait_for(&process, "HH help") && library_pty_settle(&process) &&
+                   library_pty_screen_line_matches(&process, 12U, 60U, "1/2 - recent", NULL);
+    if (success) {
+        stage = "navigation";
+        library_pty_clear_output(&process);
+        success = library_pty_send_text(&process, "j") && library_pty_settle(&process) &&
+                  library_pty_screen_line_matches(&process, 12U, 60U, "1/2 - recent", NULL) &&
+                  library_pty_send_text(&process, "x") && library_pty_settle(&process) &&
+                  library_pty_screen_line_matches(&process, 12U, 60U, "2/2 - recent", NULL) &&
+                  library_pty_send_text(&process, "zz") && library_pty_settle(&process) &&
+                  library_pty_screen_line_matches(&process, 12U, 60U, "1/2 - recent", NULL);
+    }
+    if (success) {
+        stage = "legacy view key";
+        library_pty_clear_output(&process);
+        success = library_pty_send_text(&process, "v") && library_pty_settle(&process) &&
+                  !library_pty_screen_line_matches(&process, 12U, 60U, " / card", NULL);
+    }
+    if (success) {
+        stage = "custom view key";
+        success = library_pty_send_text(&process, "t") && library_pty_wait_for(&process, " / card");
+    }
+    if (success) {
+        stage = "legacy help key";
+        success = library_pty_send_text(&process, "?") && library_pty_settle(&process) &&
+                  !library_pty_screen_line_matches(&process, 12U, 60U, "navigation", NULL);
+    }
+    if (success) {
+        stage = "help sequence prefix";
+        success = library_pty_send_text(&process, "H") && library_pty_settle(&process) &&
+                  !library_pty_screen_line_matches(&process, 12U, 60U, "navigation", NULL);
+    }
+    if (success) {
+        stage = "help sequence";
+        success = library_pty_send_text(&process, "H") && library_pty_wait_for(&process, "navigation") &&
+                  library_pty_settle(&process);
+    }
+    if (success) {
+        stage = "help labels";
+        success = library_pty_screen_line_matches(&process, 12U, 60U, "select the next item", NULL) &&
+                  library_pty_screen_line_matches(&process, 12U, 60U, "x / up / k scroll", NULL);
+    }
+    if (success) {
+        stage = "custom help close";
+        success = library_pty_send_text(&process, "CC") && library_pty_settle(&process);
+    }
+    if (success) {
+        stage = "custom modal keys";
+        library_pty_clear_output(&process);
+        success = library_pty_send_text(&process, "  ") && library_pty_wait_for(&process, "find a book") &&
+                  library_pty_send_text(&process, "ee") && library_pty_wait_for(&process, "FIRST KEY BODY") &&
+                  library_pty_send_text(&process, "q") && library_pty_wait_for(&process, "First Key") &&
+                  library_pty_send_text(&process, "q") && library_pty_settle(&process) && !process.exited &&
+                  library_pty_send_text(&process, "HH") && library_pty_wait_for(&process, "navigation") &&
+                  library_pty_send_text(&process, "Q") && library_pty_wait_exit(&process) &&
+                  WIFEXITED(process.status) && WEXITSTATUS(process.status) == 0;
+    }
+    if (!success) {
+        fprintf(stderr, "custom keymaps PTY stage %s capture: %s\n", stage,
+                process.output.data == NULL ? "(empty)" : process.output.data);
+    }
+    library_pty_process_free(&process);
+    library_pty_environment_free(&environment);
+    free(first);
+    free(second);
+    return success;
+}
+
+static MereaderTuiTestResult test_pty_custom_library_keymaps(void) {
+    TEST_ASSERT(run_pty_custom_library_keymaps());
+    return MEREADER_TUI_TEST_PASS;
+}
+
+static bool run_pty_live_resize(void) {
+    LibraryPtyEnvironment environment = {0};
+    LibraryPtyProcess process = {.master = -1};
+    char *first = library_create_epub("library-pty/resize/first.epub", "First Resize", "Reader",
+                                      "FIRST RESIZE BODY");
+    char *second = library_create_epub("library-pty/resize/second.epub", "Second Resize", "Reader",
+                                       "SECOND RESIZE BODY");
+    MereaderTuiHistoryEntry entries[] = {
+        library_entry(first, "First Resize", "Reader", 0.1, "2026-07-20 12:00:00"),
+        library_entry(second, "Second Resize", "Reader", 0.2, "2026-07-19 12:00:00"),
+    };
+    bool success = first != NULL && second != NULL && library_pty_environment_init("resize", &environment) &&
+                   library_seed_history(&environment, entries, MEREADER_TUI_ARRAY_LEN(entries)) &&
+                   library_configure_root(&environment, "auto") &&
+                   library_pty_spawn(&environment, "xterm-256color", 12U, 60U, NULL, &process) &&
+                   library_pty_wait_for(&process, "First Resize") && library_pty_send_text(&process, "j") &&
+                   library_pty_settle(&process) &&
+                   library_pty_screen_line_matches(&process, 12U, 60U, "2/2 - recent", NULL) &&
+                   library_pty_resize(&process, 3U, 20U) && library_pty_settle(&process) &&
+                   library_pty_screen_line_matches(&process, 3U, 20U, "2/2", NULL) &&
+                   library_pty_resize(&process, 16U, 80U) && library_pty_settle(&process) &&
+                   library_pty_screen_line_matches(&process, 16U, 80U, "Second Resize", NULL) &&
+                   library_pty_screen_line_matches(&process, 16U, 80U, "2/2 - recent", NULL) &&
+                   library_pty_send_text(&process, "?") && library_pty_wait_for(&process, "navigation") &&
+                   library_pty_settle(&process) && library_pty_resize(&process, 6U, 24U) &&
+                   library_pty_settle(&process) &&
+                   library_pty_screen_line_matches(&process, 6U, 24U, "help", NULL) &&
+                   library_pty_resize(&process, 14U, 80U) && library_pty_settle(&process) &&
+                   library_pty_screen_line_matches(&process, 14U, 80U, "navigation", NULL) &&
+                   library_pty_send_text(&process, "?") && library_pty_settle(&process) &&
+                   library_pty_screen_line_matches(&process, 14U, 80U, "Second Resize", NULL) &&
+                   library_pty_send_text(&process, "q") && library_pty_wait_exit(&process) &&
+                   WIFEXITED(process.status) && WEXITSTATUS(process.status) == 0;
+    if (!success) {
+        fprintf(stderr, "live resize PTY capture: %s\n",
+                process.output.data == NULL ? "(empty)" : process.output.data);
+    }
+    library_pty_process_free(&process);
+    library_pty_environment_free(&environment);
+    free(first);
+    free(second);
+    return success;
+}
+
+static MereaderTuiTestResult test_pty_live_resize(void) {
+    TEST_ASSERT(run_pty_live_resize());
+    return MEREADER_TUI_TEST_PASS;
+}
+
 static bool run_pty_progress_save_failure(void) {
     LibraryPtyEnvironment environment = {0};
     LibraryPtyProcess process = {.master = -1};
@@ -1526,15 +1741,15 @@ static bool run_pty_calibre_navigation(void) {
     LibraryPtyProcess process = {.master = -1};
     char *epub = library_create_epub("library-pty/calibre/root/Alice Writer/First Book (42)/first.epub",
                                      "First Book", "Alice Writer", "CALIBRE EPUB BODY");
-    bool fixtures = epub != NULL &&
+    char *pdf = library_create_pdf("library-pty/calibre/root/Alice Writer/First Book (42)/first.pdf",
+                                   "CALIBRE PDF BODY");
+    bool fixtures = epub != NULL && pdf != NULL &&
                     mereader_tui_test_write_text("library-pty/calibre/root/metadata.db", "") &&
-                    mereader_tui_test_write_text("library-pty/calibre/root/Alice Writer/First Book (42)/first.pdf",
-                                         "%PDF-1.4\n%%EOF\n") &&
                     mereader_tui_test_write_text("library-pty/calibre/root/Bob Writer/Second Book (7)/second.epub",
                                          "second");
     char *root = mereader_tui_test_path("library-pty/calibre/root");
     bool success = fixtures && root != NULL && library_pty_environment_init("calibre", &environment) &&
-                    library_configure_root(&environment, root) &&
+                    library_configure_root_with_mode(&environment, root, "placeholder") &&
                     library_pty_spawn(&environment, "xterm-256color", 14U, 80U, NULL, &process) &&
                     library_pty_wait_for(&process, "mereader-tui / all books") &&
                     library_pty_wait_for(&process, "First Book [EPUB +1]") &&
@@ -1583,17 +1798,30 @@ static bool run_pty_calibre_navigation(void) {
                   library_pty_screen_line_matches(&process, 14U, 80U, "First Book [PDF]", NULL);
     }
     if (success) {
-        static const char backspace = 127;
-        success = library_pty_send(&process, &backspace, 1U) && library_pty_settle(&process) &&
-                  library_pty_screen_line_matches(&process, 14U, 80U, "mereader-tui / authors / Alice Writer", NULL) &&
-                  library_pty_send_text(&process, "l") &&
-                  library_pty_wait_for(&process, "CALIBRE EPUB BODY");
+        success = library_pty_send_text(&process, "j\n") &&
+                  library_pty_wait_for(&process, "CALIBRE PDF BODY");
     }
     if (success) {
-        success = library_pty_send_text(&process, "q") && library_pty_settle(&process) &&
+        success = library_pty_send_text(&process, "q") &&
+                  library_pty_wait_for(&process, "First Book [PDF +1]") &&
+                  library_format_preference_matches(&environment, root, "first.pdf") &&
+                  library_pty_settle(&process) &&
                   library_pty_screen_line_matches(&process, 14U, 80U, "mereader-tui / all books", NULL) &&
                   library_pty_send_text(&process, "q") && library_pty_wait_exit(&process) &&
                   WIFEXITED(process.status) && WEXITSTATUS(process.status) == 0;
+    }
+    if (success) {
+        library_pty_process_free(&process);
+        success = library_pty_spawn(&environment, "xterm-256color", 14U, 80U, NULL, &process) &&
+                  library_pty_wait_for(&process, "First Book [PDF +1]") &&
+                  library_pty_send_text(&process, "\n") &&
+                  library_pty_wait_for(&process, "CALIBRE PDF BODY") &&
+                  library_pty_send_text(&process, "q") &&
+                  library_pty_wait_for(&process, "First Book [PDF +1]") &&
+                  library_pty_send_text(&process, "q") &&
+                  library_pty_wait_exit(&process) && WIFEXITED(process.status) &&
+                  WEXITSTATUS(process.status) == 0 &&
+                  library_format_preference_matches(&environment, root, "first.pdf");
     }
     if (!success) {
         fprintf(stderr, "calibre PTY capture: %s\n",
@@ -1603,6 +1831,7 @@ static bool run_pty_calibre_navigation(void) {
     library_pty_environment_free(&environment);
     free(root);
     free(epub);
+    free(pdf);
     return success;
 }
 
@@ -1704,6 +1933,8 @@ const MereaderTuiTestCase *mereader_tui_library_test_cases(size_t *count) {
         {.name = "deleted_middle_selection_preservation", .function = test_deleted_middle_selection_preservation},
         {.name = "pty_empty_library", .function = test_pty_empty_library},
         {.name = "pty_open_return_and_typed_path", .function = test_pty_open_return_and_typed_path},
+        {.name = "pty_custom_library_keymaps", .function = test_pty_custom_library_keymaps},
+        {.name = "pty_live_resize", .function = test_pty_live_resize},
         {.name = "pty_progress_save_failure", .function = test_pty_progress_save_failure},
         {.name = "pty_literal_filtering", .function = test_pty_literal_filtering},
         {.name = "pty_sorting_and_refresh", .function = test_pty_sorting_and_refresh},

@@ -134,6 +134,13 @@ open or close library help.
 .TP
 .B q
 quit the library.
+.PP
+library controls are read from the
+.B [Library Keymaps]
+section of the config file independently of reader controls. library help and
+the footer show the effective mappings. named keys, control chords, and two-key
+sequences are accepted. invalid or conflicting library bindings stop startup
+with an error that names both options.
 .SH files
 .TP
 .I ~/.config/mereader-tui/config.ini

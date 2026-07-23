@@ -1,4 +1,5 @@
 #include "mereader-tui/config.h"
+#include "mereader-tui/keymap.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -79,7 +80,29 @@ static const char MEREADER_TUI_DEFAULT_CONFIG[] =
     "PreviousMatch = N\n"
     "Confirm = enter\n"
     "CloseOrQuit = q,escape\n"
-    "Screenshot = f12\n";
+    "Screenshot = f12\n"
+    "\n"
+    "[Library Keymaps]\n"
+    "MoveDown = down,j\n"
+    "MoveUp = up,k\n"
+    "PageDown = ctrl+f,pagedown\n"
+    "PageUp = ctrl+b,pageup\n"
+    "First = home,gg\n"
+    "Last = end,G\n"
+    "Open = enter,l\n"
+    "Back = backspace,h\n"
+    "ToggleView = v\n"
+    "ToggleShelf = a\n"
+    "ChooseFormat = f\n"
+    "Sort = s\n"
+    "Refresh = r\n"
+    "OpenPath = o\n"
+    "Filter = slash\n"
+    "Find = space space\n"
+    "Help = question_mark,f1\n"
+    "Confirm = enter\n"
+    "Close = escape\n"
+    "Quit = q\n";
 
 static void mereader_tui_ini_free(MereaderTuiIni *ini) {
     if (ini == nullptr) {
@@ -528,6 +551,55 @@ static bool mereader_tui_config_parse_key_list(const char *value, MereaderTuiKey
     return true;
 }
 
+static bool mereader_tui_config_validate_key_list(const char *name, const MereaderTuiKeyList *list,
+                                                  MereaderTuiError *error) {
+    for (size_t index = 0U; index < list->length; ++index) {
+        if (!mereader_tui_key_binding_valid(list->items[index])) {
+            mereader_tui_error_set(error, MEREADER_TUI_ERROR_CORRUPT,
+                                   "invalid Library Keymaps.%s binding '%s'", name, list->items[index]);
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool mereader_tui_config_validate_library_keymaps(const MereaderTuiLibraryKeymaps *maps,
+                                                         MereaderTuiError *error) {
+    static const char *const names[] = {
+        "MoveDown", "MoveUp", "PageDown", "PageUp", "First", "Last", "Open", "Back", "ToggleView", "ToggleShelf",
+        "ChooseFormat", "Sort", "Refresh", "OpenPath", "Filter", "Find", "Help", "Close", "Quit", "Confirm",
+    };
+    const MereaderTuiKeyList *const lists[] = {
+        &maps->move_down, &maps->move_up, &maps->page_down, &maps->page_up, &maps->first, &maps->last, &maps->open,
+        &maps->back, &maps->toggle_view, &maps->toggle_shelf, &maps->choose_format, &maps->sort, &maps->refresh,
+        &maps->open_path, &maps->filter, &maps->find, &maps->help, &maps->close, &maps->quit, &maps->confirm,
+    };
+    for (size_t index = 0U; index < MEREADER_TUI_ARRAY_LEN(lists); ++index) {
+        if (!mereader_tui_config_validate_key_list(names[index], lists[index], error)) {
+            return false;
+        }
+    }
+
+    const size_t base_count = MEREADER_TUI_ARRAY_LEN(lists) - 1U;
+    for (size_t left = 0U; left < base_count; ++left) {
+        for (size_t right = left + 1U; right < base_count; ++right) {
+            if (mereader_tui_key_lists_conflict(lists[left], lists[right])) {
+                mereader_tui_error_set(error, MEREADER_TUI_ERROR_CORRUPT,
+                                       "Library Keymaps.%s conflicts with Library Keymaps.%s",
+                                       names[left], names[right]);
+                return false;
+            }
+        }
+    }
+
+    if (mereader_tui_key_lists_conflict(&maps->close, &maps->confirm)) {
+        mereader_tui_error_set(error, MEREADER_TUI_ERROR_CORRUPT,
+                               "Library Keymaps.Close conflicts with Library Keymaps.Confirm");
+        return false;
+    }
+    return true;
+}
+
 static bool mereader_tui_config_build(const MereaderTuiIni *ini, MereaderTuiConfig *config, MereaderTuiError *error) {
     MereaderTuiConfig result = {
         .max_text_width = 80,
@@ -616,11 +688,55 @@ static bool mereader_tui_config_build(const MereaderTuiIni *ini, MereaderTuiConf
         !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Keymaps", "CloseOrQuit", "q,escape"),
                                     &result.keymaps.close, error) ||
         !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Keymaps", "Screenshot", "f12"),
-                                    &result.keymaps.screenshot, error)) {
+                                    &result.keymaps.screenshot, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "MoveDown", "down,j"),
+                                    &result.library_keymaps.move_down, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "MoveUp", "up,k"),
+                                    &result.library_keymaps.move_up, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "PageDown", "ctrl+f,pagedown"),
+                                    &result.library_keymaps.page_down, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "PageUp", "ctrl+b,pageup"),
+                                    &result.library_keymaps.page_up, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "First", "home,gg"),
+                                    &result.library_keymaps.first, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "Last", "end,G"),
+                                    &result.library_keymaps.last, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "Open", "enter,l"),
+                                    &result.library_keymaps.open, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "Back", "backspace,h"),
+                                    &result.library_keymaps.back, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "ToggleView", "v"),
+                                    &result.library_keymaps.toggle_view, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "ToggleShelf", "a"),
+                                    &result.library_keymaps.toggle_shelf, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "ChooseFormat", "f"),
+                                    &result.library_keymaps.choose_format, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "Sort", "s"),
+                                    &result.library_keymaps.sort, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "Refresh", "r"),
+                                    &result.library_keymaps.refresh, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "OpenPath", "o"),
+                                    &result.library_keymaps.open_path, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "Filter", "slash"),
+                                    &result.library_keymaps.filter, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "Find", "space space"),
+                                    &result.library_keymaps.find, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "Help", "question_mark,f1"),
+                                    &result.library_keymaps.help, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "Confirm", "enter"),
+                                    &result.library_keymaps.confirm, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "Close", "escape"),
+                                    &result.library_keymaps.close, error) ||
+        !mereader_tui_config_parse_key_list(mereader_tui_ini_get(ini, "Library Keymaps", "Quit", "q"),
+                                    &result.library_keymaps.quit, error)) {
         mereader_tui_config_free(&result);
         return false;
     }
 
+    if (!mereader_tui_config_validate_library_keymaps(&result.library_keymaps, error)) {
+        mereader_tui_config_free(&result);
+        return false;
+    }
     *config = result;
     return true;
 }
@@ -646,6 +762,18 @@ static bool mereader_tui_config_output_empty(const MereaderTuiConfig *config) {
         &config->keymaps.next_match,       &config->keymaps.previous_match,
         &config->keymaps.confirm,          &config->keymaps.close,
         &config->keymaps.screenshot,       &config->keymaps.toggle_pdf_view,
+        &config->library_keymaps.move_down, &config->library_keymaps.move_up,
+        &config->library_keymaps.page_down, &config->library_keymaps.page_up,
+        &config->library_keymaps.first,     &config->library_keymaps.last,
+        &config->library_keymaps.open,      &config->library_keymaps.back,
+        &config->library_keymaps.toggle_view,
+        &config->library_keymaps.toggle_shelf,
+        &config->library_keymaps.choose_format,
+        &config->library_keymaps.sort,      &config->library_keymaps.refresh,
+        &config->library_keymaps.open_path, &config->library_keymaps.filter,
+        &config->library_keymaps.find,      &config->library_keymaps.help,
+        &config->library_keymaps.confirm,   &config->library_keymaps.close,
+        &config->library_keymaps.quit,
     };
     for (size_t index = 0U; index < MEREADER_TUI_ARRAY_LEN(lists); ++index) {
         if (lists[index]->items != nullptr || lists[index]->length != 0U) {
@@ -941,6 +1069,18 @@ void mereader_tui_config_free(MereaderTuiConfig *config) {
         &config->keymaps.next_match,       &config->keymaps.previous_match,
         &config->keymaps.confirm,          &config->keymaps.close,
         &config->keymaps.screenshot,       &config->keymaps.toggle_pdf_view,
+        &config->library_keymaps.move_down, &config->library_keymaps.move_up,
+        &config->library_keymaps.page_down, &config->library_keymaps.page_up,
+        &config->library_keymaps.first,     &config->library_keymaps.last,
+        &config->library_keymaps.open,      &config->library_keymaps.back,
+        &config->library_keymaps.toggle_view,
+        &config->library_keymaps.toggle_shelf,
+        &config->library_keymaps.choose_format,
+        &config->library_keymaps.sort,      &config->library_keymaps.refresh,
+        &config->library_keymaps.open_path, &config->library_keymaps.filter,
+        &config->library_keymaps.find,      &config->library_keymaps.help,
+        &config->library_keymaps.confirm,   &config->library_keymaps.close,
+        &config->library_keymaps.quit,
     };
     for (size_t index = 0U; index < MEREADER_TUI_ARRAY_LEN(lists); ++index) {
         mereader_tui_key_list_free(lists[index]);

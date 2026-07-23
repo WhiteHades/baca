@@ -36,6 +36,29 @@ typedef struct MereaderTuiKeymaps {
     MereaderTuiKeyList screenshot;
 } MereaderTuiKeymaps;
 
+typedef struct MereaderTuiLibraryKeymaps {
+    MereaderTuiKeyList move_down;
+    MereaderTuiKeyList move_up;
+    MereaderTuiKeyList page_down;
+    MereaderTuiKeyList page_up;
+    MereaderTuiKeyList first;
+    MereaderTuiKeyList last;
+    MereaderTuiKeyList open;
+    MereaderTuiKeyList back;
+    MereaderTuiKeyList toggle_view;
+    MereaderTuiKeyList toggle_shelf;
+    MereaderTuiKeyList choose_format;
+    MereaderTuiKeyList sort;
+    MereaderTuiKeyList refresh;
+    MereaderTuiKeyList open_path;
+    MereaderTuiKeyList filter;
+    MereaderTuiKeyList find;
+    MereaderTuiKeyList help;
+    MereaderTuiKeyList confirm;
+    MereaderTuiKeyList close;
+    MereaderTuiKeyList quit;
+} MereaderTuiLibraryKeymaps;
+
 typedef enum MereaderTuiJustification : uint8_t {
     MEREADER_TUI_JUSTIFY_LEFT = 0,
     MEREADER_TUI_JUSTIFY_FULL,
@@ -64,6 +87,7 @@ typedef struct MereaderTuiConfig {
     MereaderTuiColorScheme dark;
     MereaderTuiColorScheme light;
     MereaderTuiKeymaps keymaps;
+    MereaderTuiLibraryKeymaps library_keymaps;
 } MereaderTuiConfig;
 
 [[nodiscard]] bool mereader_tui_config_load(MereaderTuiConfig *config, MereaderTuiError *error);

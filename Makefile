@@ -35,6 +35,7 @@ SOURCES = \
 	src/graphics.c \
 	src/html.c \
 	src/image.c \
+	src/keymap.c \
 	src/layout.c \
 	src/library.c \
 	src/library_shelf.c \
