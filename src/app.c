@@ -4,6 +4,14 @@
 #include "mereader-tui/remote.h"
 
 #include <errno.h>
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wc2y-extensions"
+#endif
+#include <gdk-pixbuf/gdk-pixbuf.h>
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 #include <getopt.h>
 #include <inttypes.h>
 #include <math.h>
@@ -166,6 +174,22 @@ static int report_error(const MereaderTuiError *error) {
   return EXIT_FAILURE;
 }
 
+static bool image_loader_available(const char *expected) {
+  bool available = false;
+  GSList *formats = gdk_pixbuf_get_formats();
+  for (GSList *item = formats; item != NULL; item = item->next) {
+    gchar *name = gdk_pixbuf_format_get_name(item->data);
+    const bool matches = name != NULL && strcmp(name, expected) == 0;
+    g_free(name);
+    if (matches) {
+      available = true;
+      break;
+    }
+  }
+  g_slist_free(formats);
+  return available;
+}
+
 static int print_doctor(void) {
   MereaderTuiError error = {0};
   char *config = mereader_tui_xdg_config_path("config.ini", &error);
@@ -188,7 +212,14 @@ static int print_doctor(void) {
   printf("MOBI/AZW: %s\n",
          mobitool == NULL ? "unavailable (mobitool not found in PATH)"
                           : mobitool);
-  puts("Core formats: ready");
+  printf("WebP: %s\n",
+         image_loader_available("webp")
+             ? "ready"
+             : "unavailable (GdkPixbuf loader not found)");
+  printf("SVG: %s\n",
+         image_loader_available("svg")
+             ? "ready"
+             : "unavailable (GdkPixbuf loader not found)");
   free(config);
   free(database);
   free(downloads);

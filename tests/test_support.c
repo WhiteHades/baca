@@ -13,12 +13,6 @@ static char *test_root_path;
 static bool cleanup_registered;
 static char test_detail[1024];
 
-static void set_detail(const char *format, va_list arguments) __attribute__((format(printf, 1, 0)));
-
-static void set_detail(const char *format, va_list arguments) {
-    (void)vsnprintf(test_detail, sizeof(test_detail), format, arguments);
-}
-
 static bool make_test_directory(const char *relative) {
     char *path = mereader_tui_test_path(relative);
     if (path == NULL) {
@@ -192,18 +186,9 @@ MereaderTuiTestResult mereader_tui_test_fail_at(const char *file, int line, cons
     return MEREADER_TUI_TEST_FAIL;
 }
 
-MereaderTuiTestResult mereader_tui_test_skip(const char *format, ...) {
-    va_list arguments;
-    va_start(arguments, format);
-    set_detail(format, arguments);
-    va_end(arguments);
-    return MEREADER_TUI_TEST_SKIP;
-}
-
 int mereader_tui_test_run(const MereaderTuiTestSuite *suites, size_t suite_count) {
     size_t passed = 0U;
     size_t failed = 0U;
-    size_t skipped = 0U;
     for (size_t suite_index = 0U; suite_index < suite_count; suite_index++) {
         const MereaderTuiTestSuite *suite = &suites[suite_index];
         for (size_t case_index = 0U; case_index < suite->count; case_index++) {
@@ -213,10 +198,6 @@ int mereader_tui_test_run(const MereaderTuiTestSuite *suites, size_t suite_count
             if (result == MEREADER_TUI_TEST_PASS) {
                 printf("PASS %s.%s\n", suite->name, test->name);
                 passed++;
-            } else if (result == MEREADER_TUI_TEST_SKIP) {
-                printf("SKIP %s.%s: %s\n", suite->name, test->name,
-                       test_detail[0] == '\0' ? "no reason supplied" : test_detail);
-                skipped++;
             } else {
                 printf("FAIL %s.%s: %s\n", suite->name, test->name,
                        test_detail[0] == '\0' ? "no diagnostic supplied" : test_detail);
@@ -224,6 +205,6 @@ int mereader_tui_test_run(const MereaderTuiTestSuite *suites, size_t suite_count
             }
         }
     }
-    printf("SUMMARY %zu passed, %zu skipped, %zu failed\n", passed, skipped, failed);
+    printf("SUMMARY %zu passed, %zu failed\n", passed, failed);
     return failed == 0U ? EXIT_SUCCESS : EXIT_FAILURE;
 }

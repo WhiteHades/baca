@@ -9,7 +9,6 @@
 typedef enum MereaderTuiTestResult {
     MEREADER_TUI_TEST_PASS = 0,
     MEREADER_TUI_TEST_FAIL,
-    MEREADER_TUI_TEST_SKIP,
 } MereaderTuiTestResult;
 
 typedef MereaderTuiTestResult (*MereaderTuiTestFunction)(void);
@@ -36,8 +35,6 @@ void mereader_tui_test_support_cleanup(void);
 
 [[nodiscard]] MereaderTuiTestResult mereader_tui_test_fail_at(const char *file, int line, const char *format, ...)
     __attribute__((format(printf, 3, 4)));
-[[nodiscard]] MereaderTuiTestResult mereader_tui_test_skip(const char *format, ...)
-    __attribute__((format(printf, 1, 2)));
 [[nodiscard]] int mereader_tui_test_run(const MereaderTuiTestSuite *suites, size_t suite_count);
 
 [[nodiscard]] const MereaderTuiTestCase *mereader_tui_common_test_cases(size_t *count);

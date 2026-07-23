@@ -64,7 +64,7 @@ case $doctor_output in
     *) fail doctor ;;
 esac
 case $doctor_output in
-    *"Downloads: $XDG_CACHE_HOME/mereader-tui/downloads"*"MOBI/AZW:"*) ;;
+    *"Downloads: $XDG_CACHE_HOME/mereader-tui/downloads"*"MOBI/AZW:"*"WebP: ready"*"SVG: ready"*) ;;
     *) fail doctor ;;
 esac
 pass doctor

@@ -13,6 +13,7 @@
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 #include <zip.h>
 
@@ -99,7 +100,6 @@ typedef struct StandaloneFormatFixture {
     const char *loader;
     const unsigned char *data;
     size_t length;
-    bool optional_loader;
 } StandaloneFormatFixture;
 
 static bool probe_load_resource(MereaderTuiDocument *document, const char *uri, MereaderTuiResource *resource,
@@ -189,9 +189,8 @@ static MereaderTuiTestResult test_valid_standalone_format(const StandaloneFormat
     }
     g_slist_free(formats);
     if (!loader_available) {
-        return fixture->optional_loader
-                   ? mereader_tui_test_skip("GdkPixbuf %s loader unavailable", fixture->loader)
-                   : mereader_tui_test_fail_at(__FILE__, __LINE__, "GdkPixbuf %s loader unavailable", fixture->loader);
+        return mereader_tui_test_fail_at(__FILE__, __LINE__, "GdkPixbuf %s loader unavailable",
+                                         fixture->loader);
     }
 
     char target_relative[96] = {0};
@@ -1256,7 +1255,6 @@ static MereaderTuiTestResult test_standalone_valid_webp_magic_decode_and_probe(v
         .loader = "webp",
         .data = pixel_webp,
         .length = sizeof(pixel_webp),
-        .optional_loader = true,
     };
     return test_valid_standalone_format(&fixture);
 }
@@ -1279,7 +1277,6 @@ static MereaderTuiTestResult test_standalone_valid_svg_magic_decode_and_probe(vo
         .loader = "svg",
         .data = pixel_svg,
         .length = sizeof(pixel_svg) - 1U,
-        .optional_loader = true,
     };
     return test_valid_standalone_format(&fixture);
 }
@@ -1576,11 +1573,8 @@ static MereaderTuiTestResult test_encrypted_zip_member_error(void) {
     TEST_ASSERT(archive != NULL);
     zip_int64_t index = -1;
     TEST_ASSERT(zip_add_bytes(archive, "OEBPS/secret.bin", "secret", 6U, false, &index));
-    if (zip_file_set_encryption(archive, (zip_uint64_t)index, ZIP_EM_AES_256, "test-password") != 0) {
-        zip_discard(archive);
-        free(path);
-        return mereader_tui_test_skip("libzip cannot create AES-encrypted fixtures");
-    }
+    TEST_ASSERT(zip_file_set_encryption(archive, (zip_uint64_t)index, ZIP_EM_AES_256,
+                                        "test-password") == 0);
     TEST_ASSERT(close_archive(archive));
     MereaderTuiDocument document = {0};
     MereaderTuiError error = {0};
@@ -1591,62 +1585,238 @@ static MereaderTuiTestResult test_encrypted_zip_member_error(void) {
     return MEREADER_TUI_TEST_PASS;
 }
 
-static char *configured_mobitool_path(const char *configured) {
-    if (configured == NULL || configured[0] == '\0' || strchr(configured, '/') == NULL) {
-        return NULL;
+static bool install_fake_mobitool(const char *script, char **old_path, MereaderTuiError *error) {
+    if (!mereader_tui_test_mkdir("mobi-bin")) {
+        return false;
     }
-    MereaderTuiError error = {0};
-    return mereader_tui_realpath(configured, &error);
-}
-
-static MereaderTuiTestResult test_optional_real_mobi(void) {
-    const char *configured_tool = getenv("MEREADER_TUI_TEST_MOBITOOL");
-    const char *configured_sample = getenv("MEREADER_TUI_TEST_MOBI_SAMPLE");
-    if (configured_tool == NULL || configured_tool[0] == '\0' || configured_sample == NULL ||
-        configured_sample[0] == '\0') {
-        return mereader_tui_test_skip(
-            "set MEREADER_TUI_TEST_MOBITOOL and MEREADER_TUI_TEST_MOBI_SAMPLE for real conversion");
-    }
-    char *tool = configured_mobitool_path(configured_tool);
-    MereaderTuiError error = {0};
-    char *sample = mereader_tui_realpath(configured_sample, &error);
-    if (tool == NULL || access(tool, X_OK) != 0 || sample == NULL) {
-        free(tool);
-        free(sample);
-        return mereader_tui_test_fail_at(__FILE__, __LINE__, "configured MOBI tool/sample is not accessible");
-    }
-    TEST_ASSERT(mereader_tui_test_mkdir("mobi-bin"));
     char *shim = mereader_tui_test_path("mobi-bin/mobitool");
     char *bin = mereader_tui_test_path("mobi-bin");
-    TEST_ASSERT(shim != NULL && bin != NULL);
-    TEST_ASSERT(symlink(tool, shim) == 0);
+    if (shim == NULL || bin == NULL || !mereader_tui_test_write_text("mobi-bin/mobitool", script) ||
+        chmod(shim, 0700) != 0) {
+        free(shim);
+        free(bin);
+        return false;
+    }
     const char *old_path_value = getenv("PATH");
-    char *old_path = mereader_tui_strdup(old_path_value == NULL ? "" : old_path_value, &error);
-    TEST_ASSERT(old_path != NULL);
+    *old_path = mereader_tui_strdup(old_path_value == NULL ? "" : old_path_value, error);
+    if (*old_path == NULL) {
+        free(shim);
+        free(bin);
+        return false;
+    }
     MereaderTuiString path_value = {0};
-    TEST_ASSERT(mereader_tui_string_append(&path_value, bin, &error));
-    TEST_ASSERT(mereader_tui_string_append_char(&path_value, ':', &error));
-    TEST_ASSERT(mereader_tui_string_append(&path_value, old_path, &error));
-    TEST_ASSERT(setenv("PATH", path_value.data, 1) == 0);
-
-    size_t before = mereader_tui_test_count_directories("tmp", "mereader-tui-mobi-");
-    TEST_ASSERT(before != SIZE_MAX);
-    MereaderTuiDocument document = {0};
-    TEST_ASSERT_MSG(mereader_tui_document_open(&document, sample, &error), "%s", error.message);
-    size_t during = mereader_tui_test_count_directories("tmp", "mereader-tui-mobi-");
-    TEST_ASSERT_SIZE(during, before + 1U);
-    TEST_ASSERT(document.format == MEREADER_TUI_FORMAT_MOBI || document.format == MEREADER_TUI_FORMAT_AZW);
-    TEST_ASSERT(document.block_count > 0U && document.section_count > 0U);
-    TEST_ASSERT(document.metadata.title != NULL || document.metadata.creator != NULL);
-    mereader_tui_document_close(&document);
-    TEST_ASSERT_SIZE(mereader_tui_test_count_directories("tmp", "mereader-tui-mobi-"), before);
-    TEST_ASSERT(setenv("PATH", old_path, 1) == 0);
+    const bool installed = mereader_tui_string_append(&path_value, bin, error) &&
+                           mereader_tui_string_append_char(&path_value, ':', error) &&
+                           mereader_tui_string_append(&path_value, *old_path, error) &&
+                           setenv("PATH", path_value.data, 1) == 0;
     mereader_tui_string_free(&path_value);
-    free(old_path);
     free(shim);
     free(bin);
-    free(tool);
-    free(sample);
+    if (!installed) {
+        free(*old_path);
+        *old_path = NULL;
+    }
+    return installed;
+}
+
+static void restore_fake_mobitool(char *old_path) {
+    if (old_path != NULL) {
+        (void)setenv("PATH", old_path, 1);
+    }
+    free(old_path);
+}
+
+static char *create_fake_mobi_input(const char *extension) {
+    unsigned char header[68] = {0};
+    memcpy(header + 60U, "BOOKMOBI", 8U);
+    char relative[64] = {0};
+    const int length = snprintf(relative, sizeof(relative), "mobi-input/book%s", extension);
+    if (length <= 0 || (size_t)length >= sizeof(relative) ||
+        !mereader_tui_test_write(relative, header, sizeof(header))) {
+        return NULL;
+    }
+    return mereader_tui_test_path(relative);
+}
+
+static bool create_fake_mobitool_epub(char **path) {
+    static const char opf[] =
+        "<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\">"
+        "<metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:title>Converted Book</dc:title>"
+        "<dc:creator>Generated Fixture</dc:creator></metadata>"
+        "<manifest><item id=\"chapter\" href=\"chapter.xhtml\" media-type=\"application/xhtml+xml\"/></manifest>"
+        "<spine><itemref idref=\"chapter\"/></spine></package>";
+    static const char chapter[] =
+        "<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Converted text.</p></body></html>";
+    const FixtureMember member = {
+        .name = "OEBPS/chapter.xhtml",
+        .data = chapter,
+        .length = sizeof(chapter) - 1U,
+    };
+    return create_epub("mobi-output/template.epub", opf, &member, 1U, path);
+}
+
+static MereaderTuiTestResult test_fake_mobitool_converts_all_shared_extensions(void) {
+    static const char script[] =
+        "#!/bin/sh\n"
+        "input=$4\n"
+        "name=${input##*/}\n"
+        "name=${name%.*}.epub\n"
+        "/bin/cp \"$MEREADER_TUI_TEST_FAKE_EPUB\" \"$3/$name\"\n";
+    static const struct {
+        const char *extension;
+        MereaderTuiDocumentFormat format;
+    } cases[] = {
+        {".mobi", MEREADER_TUI_FORMAT_MOBI},
+        {".prc", MEREADER_TUI_FORMAT_MOBI},
+        {".azw", MEREADER_TUI_FORMAT_AZW},
+        {".azw3", MEREADER_TUI_FORMAT_AZW},
+    };
+    MereaderTuiError error = {0};
+    char *epub = NULL;
+    char *old_path = NULL;
+    TEST_ASSERT(create_fake_mobitool_epub(&epub));
+    TEST_ASSERT(setenv("MEREADER_TUI_TEST_FAKE_EPUB", epub, 1) == 0);
+    TEST_ASSERT(install_fake_mobitool(script, &old_path, &error));
+
+    for (size_t index = 0U; index < MEREADER_TUI_ARRAY_LEN(cases); ++index) {
+        char *input = create_fake_mobi_input(cases[index].extension);
+        TEST_ASSERT(input != NULL);
+        const size_t before = mereader_tui_test_count_directories("tmp", "mereader-tui-mobi-");
+        MereaderTuiDocument document = {0};
+        TEST_ASSERT_MSG(mereader_tui_document_open(&document, input, &error), "%s", error.message);
+        TEST_ASSERT_INT(document.format, cases[index].format);
+        TEST_ASSERT(find_text(&document, "Converted text.") != NULL);
+        mereader_tui_document_close(&document);
+        TEST_ASSERT_SIZE(mereader_tui_test_count_directories("tmp", "mereader-tui-mobi-"), before);
+        free(input);
+    }
+    restore_fake_mobitool(old_path);
+    TEST_ASSERT(unsetenv("MEREADER_TUI_TEST_FAKE_EPUB") == 0);
+    free(epub);
+    return MEREADER_TUI_TEST_PASS;
+}
+
+static MereaderTuiTestResult test_fake_mobitool_rejects_outputs_and_drm(void) {
+    static const struct {
+        const char *script;
+        MereaderTuiErrorCode code;
+        const char *message;
+    } cases[] = {
+        {"#!/bin/sh\nexit 0\n", MEREADER_TUI_ERROR_EXTERNAL, "without producing"},
+        {"#!/bin/sh\ninput=$4\nname=${input##*/}\nname=${name%.*}.epub\nprintf bad >\"$3/$name\"\n",
+         MEREADER_TUI_ERROR_CORRUPT, "EPUB"},
+        {"#!/bin/sh\ninput=$4\nname=${input##*/}\nname=${name%.*}.epub\nmkdir \"$3/$name\"\n",
+         MEREADER_TUI_ERROR_EXTERNAL, "non-regular"},
+        {"#!/bin/sh\ninput=$4\nname=${input##*/}\nname=${name%.*}.epub\n/usr/bin/truncate -s 1073741825 \"$3/$name\"\n",
+         MEREADER_TUI_ERROR_EXTERNAL, "size limit"},
+        {"#!/bin/sh\nprintf 'Document is encrypted\\n' >&2\nexit 1\n",
+         MEREADER_TUI_ERROR_UNSUPPORTED, "DRM protected"},
+        {"#!/bin/sh\nprintf 'AZW4 print replica book\\n' >&2\nexit 1\n",
+         MEREADER_TUI_ERROR_UNSUPPORTED, "Print Replica"},
+    };
+    MereaderTuiError error = {0};
+    for (size_t index = 0U; index < MEREADER_TUI_ARRAY_LEN(cases); ++index) {
+        char *old_path = NULL;
+        TEST_ASSERT(install_fake_mobitool(cases[index].script, &old_path, &error));
+        char *input = create_fake_mobi_input(".mobi");
+        TEST_ASSERT(input != NULL);
+        const size_t before = mereader_tui_test_count_directories("tmp", "mereader-tui-mobi-");
+        MereaderTuiDocument document = {0};
+        TEST_ASSERT(!mereader_tui_document_open(&document, input, &error));
+        TEST_ASSERT_ERROR(error, cases[index].code);
+        TEST_ASSERT(strstr(error.message, cases[index].message) != NULL);
+        TEST_ASSERT_SIZE(mereader_tui_test_count_directories("tmp", "mereader-tui-mobi-"), before);
+        restore_fake_mobitool(old_path);
+        mereader_tui_error_clear(&error);
+        free(input);
+    }
+    return MEREADER_TUI_TEST_PASS;
+}
+
+static MereaderTuiTestResult test_fake_mobitool_bounds_and_sanitizes_diagnostics(void) {
+    static const char oversized_script[] =
+        "#!/bin/sh\n"
+        "/usr/bin/head -c 65537 /dev/zero\n"
+        "exit 1\n";
+    static const char hostile_script[] =
+        "#!/bin/sh\n"
+        "/usr/bin/printf 'bad\\n\\t\\033[31m\\x9B\\xC2\\x9Btail\\177' >&2\n"
+        "exit 7\n";
+    MereaderTuiError error = {0};
+    char *input = create_fake_mobi_input(".mobi");
+    char *old_path = NULL;
+    TEST_ASSERT(input != NULL);
+    TEST_ASSERT(install_fake_mobitool(oversized_script, &old_path, &error));
+    MereaderTuiDocument document = {0};
+    size_t before = mereader_tui_test_count_directories("tmp", "mereader-tui-mobi-");
+    TEST_ASSERT(!mereader_tui_document_open(&document, input, &error));
+    TEST_ASSERT_ERROR(error, MEREADER_TUI_ERROR_EXTERNAL);
+    TEST_ASSERT(strstr(error.message, "diagnostic output limit") != NULL);
+    TEST_ASSERT_SIZE(mereader_tui_test_count_directories("tmp", "mereader-tui-mobi-"), before);
+    restore_fake_mobitool(old_path);
+    mereader_tui_error_clear(&error);
+
+    old_path = NULL;
+    TEST_ASSERT(install_fake_mobitool(hostile_script, &old_path, &error));
+    TEST_ASSERT(!mereader_tui_document_open(&document, input, &error));
+    TEST_ASSERT_ERROR(error, MEREADER_TUI_ERROR_EXTERNAL);
+    TEST_ASSERT(strchr(error.message, '\n') == NULL && strchr(error.message, '\r') == NULL &&
+                strchr(error.message, '\t') == NULL && strchr(error.message, '\033') == NULL &&
+                strchr(error.message, '\177') == NULL &&
+                memchr(error.message, 0x9b, strlen(error.message)) == NULL &&
+                strstr(error.message, "\302\233") == NULL);
+    restore_fake_mobitool(old_path);
+    free(input);
+    return MEREADER_TUI_TEST_PASS;
+}
+
+static bool wait_for_process_exit(pid_t process) {
+    for (unsigned attempt = 0U; attempt < 100U; ++attempt) {
+        if (kill(process, 0) != 0 && errno == ESRCH) {
+            return true;
+        }
+        struct timespec pause = {.tv_nsec = 10000000L};
+        (void)nanosleep(&pause, NULL);
+    }
+    return false;
+}
+
+static MereaderTuiTestResult test_fake_mobitool_timeout_cleans_process_group(void) {
+    static const char script[] =
+        "#!/bin/sh\n"
+        "trap '' TERM\n"
+        "/bin/sh -c 'trap \"\" TERM; while :; do /bin/sleep 1; done' &\n"
+        "descendant=$!\n"
+        "printf '%s %s\\n' \"$$\" \"$descendant\" >\"$MEREADER_TUI_TEST_MOBITOOL_PID_FILE\"\n"
+        "wait\n";
+    MereaderTuiError error = {0};
+    char *input = create_fake_mobi_input(".mobi");
+    char *pid_path = mereader_tui_test_path("mobi-output/processes");
+    char *old_path = NULL;
+    TEST_ASSERT(input != NULL && pid_path != NULL);
+    TEST_ASSERT(setenv("MEREADER_TUI_TEST_MOBITOOL_TIMEOUT_MS", "200", 1) == 0);
+    TEST_ASSERT(setenv("MEREADER_TUI_TEST_MOBITOOL_PID_FILE", pid_path, 1) == 0);
+    TEST_ASSERT(install_fake_mobitool(script, &old_path, &error));
+    const size_t before = mereader_tui_test_count_directories("tmp", "mereader-tui-mobi-");
+    MereaderTuiDocument document = {0};
+    TEST_ASSERT(!mereader_tui_document_open(&document, input, &error));
+    TEST_ASSERT_ERROR(error, MEREADER_TUI_ERROR_EXTERNAL);
+    TEST_ASSERT(strstr(error.message, "200 ms timeout") != NULL);
+    TEST_ASSERT_SIZE(mereader_tui_test_count_directories("tmp", "mereader-tui-mobi-"), before);
+    MereaderTuiBuffer pids = {0};
+    TEST_ASSERT(mereader_tui_read_file(pid_path, &pids, &error));
+    long parent = 0L;
+    long descendant = 0L;
+    TEST_ASSERT(sscanf((const char *)pids.data, "%ld %ld", &parent, &descendant) == 2);
+    TEST_ASSERT(parent > 0L && descendant > 0L);
+    TEST_ASSERT(wait_for_process_exit((pid_t)parent));
+    TEST_ASSERT(wait_for_process_exit((pid_t)descendant));
+    mereader_tui_buffer_free(&pids);
+    restore_fake_mobitool(old_path);
+    TEST_ASSERT(unsetenv("MEREADER_TUI_TEST_MOBITOOL_TIMEOUT_MS") == 0);
+    TEST_ASSERT(unsetenv("MEREADER_TUI_TEST_MOBITOOL_PID_FILE") == 0);
+    free(pid_path);
+    free(input);
     return MEREADER_TUI_TEST_PASS;
 }
 
@@ -1696,7 +1866,14 @@ const MereaderTuiTestCase *mereader_tui_document_test_cases(size_t *count) {
         {.name = "oversized_member_error", .function = test_oversized_member_error},
         {.name = "encryption_document_error", .function = test_encryption_document_error},
         {.name = "encrypted_zip_member_error", .function = test_encrypted_zip_member_error},
-        {.name = "optional_real_mobi", .function = test_optional_real_mobi},
+        {.name = "fake_mobitool_converts_all_shared_extensions",
+         .function = test_fake_mobitool_converts_all_shared_extensions},
+        {.name = "fake_mobitool_rejects_outputs_and_drm",
+         .function = test_fake_mobitool_rejects_outputs_and_drm},
+        {.name = "fake_mobitool_bounds_and_sanitizes_diagnostics",
+         .function = test_fake_mobitool_bounds_and_sanitizes_diagnostics},
+        {.name = "fake_mobitool_timeout_cleans_process_group",
+         .function = test_fake_mobitool_timeout_cleans_process_group},
     };
     *count = MEREADER_TUI_ARRAY_LEN(cases);
     return cases;

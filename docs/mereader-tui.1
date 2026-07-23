@@ -33,7 +33,8 @@ print command help and exit.
 print the version and exit.
 .TP
 .BR \-d , " " \-\-doctor
-print runtime paths and report whether mobi or azw support is available.
+print runtime paths and report whether mobi or azw, webp, and svg support is
+available.
 .TP
 .BR \-r , " " \-\-history
 print reading history and exit.
@@ -167,7 +168,10 @@ from libmobi in
 .BR PATH .
 the extracted book must be drm-free and convertible to epub. kindle print
 replica and azw4 books are not supported. linked native libraries handle all
-other documented formats.
+other documented formats, with gdk-pixbuf loaders required for webp and svg.
+use
+.B \-\-doctor
+to check those runtime loaders.
 .SH exit status
 returns zero on success and nonzero for invalid arguments, unavailable
 dependencies, corrupt or unsupported documents, and runtime failures.

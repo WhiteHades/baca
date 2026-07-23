@@ -58,7 +58,7 @@ sudo apt update
 sudo apt install build-essential pkg-config libncurses-dev libsqlite3-dev \
   libglib2.0-dev libxml2-dev libzip-dev libarchive-dev libpcre2-dev \
   libgdk-pixbuf-2.0-dev libpoppler-glib-dev libcairo2-dev \
-  libcurl4-openssl-dev librsvg2-common
+  libcurl4-openssl-dev librsvg2-common webp-pixbuf-loader
 ```
 
 ### fedora

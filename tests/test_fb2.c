@@ -158,31 +158,12 @@ static MereaderTuiTestResult test_minimal_book_without_images(void) {
     return MEREADER_TUI_TEST_PASS;
 }
 
-static MereaderTuiTestResult test_optional_real_fb2(void) {
-    const char *configured = getenv("MEREADER_TUI_TEST_FB2_SAMPLE");
-    if (configured == NULL || configured[0] == '\0') {
-        return mereader_tui_test_skip("set MEREADER_TUI_TEST_FB2_SAMPLE for real FictionBook parsing");
-    }
-    MereaderTuiError error = {0};
-    char *path = mereader_tui_realpath(configured, &error);
-    TEST_ASSERT_MSG(path != NULL, "%s", error.message);
-    MereaderTuiDocument document = {0};
-    TEST_ASSERT_MSG(mereader_tui_document_open(&document, path, &error), "%s", error.message);
-    TEST_ASSERT_INT(document.format, MEREADER_TUI_FORMAT_FB2);
-    TEST_ASSERT(document.metadata.title != NULL);
-    TEST_ASSERT(document.block_count > 0U);
-    mereader_tui_document_close(&document);
-    free(path);
-    return MEREADER_TUI_TEST_PASS;
-}
-
 const MereaderTuiTestCase *mereader_tui_fb2_test_cases(size_t *count) {
     static const MereaderTuiTestCase cases[] = {
         {.name = "metadata_toc_styles_links_bodies_and_image",
          .function = test_metadata_toc_styles_links_bodies_and_image},
         {.name = "malformed_dtd_and_binary_errors", .function = test_malformed_dtd_and_binary_errors},
         {.name = "minimal_book_without_images", .function = test_minimal_book_without_images},
-        {.name = "optional_real_fb2", .function = test_optional_real_fb2},
     };
     *count = MEREADER_TUI_ARRAY_LEN(cases);
     return cases;

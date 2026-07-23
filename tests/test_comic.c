@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <zip.h>
 
 static const unsigned char comic_pixel_png[] = {
     0x89U, 0x50U, 0x4eU, 0x47U, 0x0dU, 0x0aU, 0x1aU, 0x0aU, 0x00U, 0x00U, 0x00U, 0x0dU, 0x49U, 0x48U,
@@ -16,6 +17,24 @@ static const unsigned char comic_pixel_png[] = {
     0x00U, 0xb5U, 0x1cU, 0x0cU, 0x02U, 0x00U, 0x00U, 0x00U, 0x0bU, 0x49U, 0x44U, 0x41U, 0x54U, 0x78U,
     0xdaU, 0x63U, 0x64U, 0xf8U, 0x0fU, 0x00U, 0x01U, 0x05U, 0x01U, 0x01U, 0x27U, 0x18U, 0xe3U, 0x66U,
     0x00U, 0x00U, 0x00U, 0x00U, 0x49U, 0x45U, 0x4eU, 0x44U, 0xaeU, 0x42U, 0x60U, 0x82U,
+};
+
+static const unsigned char generated_minimal_cbr[] = {
+    0x52U, 0x61U, 0x72U, 0x21U, 0x1aU, 0x07U, 0x01U, 0x00U, 0x33U, 0x92U, 0xb5U, 0xe5U,
+    0x0aU, 0x01U, 0x05U, 0x06U, 0x00U, 0x05U, 0x01U, 0x01U, 0x80U, 0x80U, 0x00U, 0x3cU,
+    0x57U, 0xbdU, 0xc6U, 0x26U, 0x02U, 0x03U, 0x0bU, 0xe1U, 0x00U, 0x04U, 0xf0U, 0x00U,
+    0xa4U, 0x83U, 0x02U, 0x9cU, 0x7fU, 0x34U, 0x09U, 0x80U, 0x03U, 0x01U, 0x08U, 0x70U,
+    0x61U, 0x67U, 0x65U, 0x2eU, 0x73U, 0x76U, 0x67U, 0x0aU, 0x03U, 0x13U, 0x3bU, 0x20U,
+    0x62U, 0x6aU, 0x1cU, 0xa1U, 0x39U, 0x04U, 0xc3U, 0xc7U, 0x5eU, 0x30U, 0x44U, 0x42U,
+    0x3fU, 0x74U, 0x03U, 0x39U, 0xddU, 0x15U, 0xc8U, 0x73U, 0x9cU, 0xfcU, 0x46U, 0xd0U,
+    0xddU, 0x32U, 0xd8U, 0xc0U, 0x48U, 0x7eU, 0x10U, 0x72U, 0x7cU, 0xefU, 0xf8U, 0x38U,
+    0x26U, 0x29U, 0x4dU, 0x87U, 0x71U, 0x2dU, 0xc5U, 0xb5U, 0x4eU, 0xe4U, 0x3aU, 0xb3U,
+    0x2aU, 0x66U, 0x4fU, 0xe7U, 0x07U, 0xfdU, 0x47U, 0xb9U, 0xeaU, 0xa7U, 0x91U, 0x7bU,
+    0xa0U, 0x89U, 0x99U, 0xacU, 0xf3U, 0x5fU, 0x92U, 0x70U, 0xe5U, 0x82U, 0x41U, 0xa3U,
+    0x94U, 0x07U, 0x0eU, 0x09U, 0xe8U, 0x98U, 0xa0U, 0xbdU, 0xb0U, 0x72U, 0x2dU, 0x4bU,
+    0x6bU, 0x80U, 0x19U, 0x26U, 0xeeU, 0x56U, 0xf5U, 0x0eU, 0x61U, 0x18U, 0xa0U, 0x5fU,
+    0x4eU, 0x14U, 0x28U, 0xccU, 0xafU, 0x74U, 0xa0U, 0x1dU, 0x77U, 0x56U, 0x51U, 0x03U,
+    0x05U, 0x04U, 0x00U,
 };
 
 typedef enum ComicFixtureFormat {
@@ -238,9 +257,6 @@ static MereaderTuiTestResult test_cb7_magic_detection(void) {
     char *path = NULL;
     const ComicFixtureResult created =
         comic_create_fixture("comic/seven-zip.unknown", COMIC_FIXTURE_7ZIP, &entry, 1U, &path);
-    if (created == COMIC_FIXTURE_UNSUPPORTED) {
-        return mereader_tui_test_skip("installed libarchive cannot write 7-Zip fixtures");
-    }
     TEST_ASSERT_INT(created, COMIC_FIXTURE_OK);
     MereaderTuiDocument document = {0};
     MereaderTuiError error = {0};
@@ -322,15 +338,37 @@ static MereaderTuiTestResult test_in_place_archive_mutation_is_rejected(void) {
     return MEREADER_TUI_TEST_PASS;
 }
 
-static MereaderTuiTestResult test_optional_real_cbr(void) {
-    const char *configured = getenv("MEREADER_TUI_TEST_CBR_SAMPLE");
-    if (configured == NULL || configured[0] == '\0') {
-        return mereader_tui_test_skip("set MEREADER_TUI_TEST_CBR_SAMPLE for real RAR decoding");
-    }
-    MereaderTuiError error = {0};
-    char *path = mereader_tui_realpath(configured, &error);
-    TEST_ASSERT_MSG(path != NULL, "%s", error.message);
+static MereaderTuiTestResult test_encrypted_comic_is_rejected(void) {
+    char *path = mereader_tui_test_path("comic/encrypted.cbz");
+    TEST_ASSERT(path != NULL);
+    int zip_error = 0;
+    zip_t *archive = zip_open(path, ZIP_CREATE | ZIP_TRUNCATE, &zip_error);
+    TEST_ASSERT(archive != NULL);
+    zip_source_t *source = zip_source_buffer(archive, comic_pixel_png, sizeof(comic_pixel_png), 0);
+    TEST_ASSERT(source != NULL);
+    const zip_int64_t index = zip_file_add(archive, "page.png", source, ZIP_FL_ENC_UTF_8);
+    TEST_ASSERT(index >= 0);
+    TEST_ASSERT(zip_file_set_encryption(archive, (zip_uint64_t)index, ZIP_EM_AES_256,
+                                        "generated-test-password") == 0);
+    TEST_ASSERT(zip_close(archive) == 0);
 
+    MereaderTuiDocument document = {0};
+    MereaderTuiError error = {0};
+    TEST_ASSERT(!mereader_tui_document_open(&document, path, &error));
+    TEST_ASSERT_ERROR(error, MEREADER_TUI_ERROR_UNSUPPORTED);
+    TEST_ASSERT(strstr(error.message, "encrypted comic archives") != NULL);
+    TEST_ASSERT(document.path == NULL && document.backend == NULL);
+    free(path);
+    return MEREADER_TUI_TEST_PASS;
+}
+
+static MereaderTuiTestResult test_generated_cbr_decodes_real_rar(void) {
+    TEST_ASSERT(mereader_tui_test_write("comic/generated.cbr", generated_minimal_cbr,
+                                        sizeof(generated_minimal_cbr)));
+    char *path = mereader_tui_test_path("comic/generated.cbr");
+    TEST_ASSERT(path != NULL);
+
+    MereaderTuiError error = {0};
     MereaderTuiDocument document = {0};
     TEST_ASSERT_MSG(mereader_tui_document_open(&document, path, &error), "%s", error.message);
     TEST_ASSERT_INT(document.format, MEREADER_TUI_FORMAT_COMIC);
@@ -361,7 +399,9 @@ const MereaderTuiTestCase *mereader_tui_comic_test_cases(size_t *count) {
         {.name = "cb7_magic_detection", .function = test_cb7_magic_detection},
         {.name = "empty_unsupported_and_malformed_archives", .function = test_empty_unsupported_and_malformed_archives},
         {.name = "in_place_archive_mutation_is_rejected", .function = test_in_place_archive_mutation_is_rejected},
-        {.name = "optional_real_cbr", .function = test_optional_real_cbr},
+        {.name = "encrypted_comic_is_rejected", .function = test_encrypted_comic_is_rejected},
+        {.name = "generated_cbr_decodes_real_rar",
+         .function = test_generated_cbr_decodes_real_rar},
     };
     *count = MEREADER_TUI_ARRAY_LEN(cases);
     return cases;

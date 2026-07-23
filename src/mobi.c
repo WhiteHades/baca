@@ -98,6 +98,20 @@ static bool monotonic_milliseconds(uint64_t *milliseconds, MereaderTuiError *err
     return true;
 }
 
+static unsigned mobitool_timeout_ms(void) {
+    const char *configured = getenv("MEREADER_TUI_TEST_MOBITOOL_TIMEOUT_MS");
+    if (configured == NULL || configured[0] == '\0') {
+        return MOBITOOL_TIMEOUT_MS;
+    }
+    errno = 0;
+    char *end = NULL;
+    const unsigned long parsed = strtoul(configured, &end, 10);
+    return errno == 0 && end != configured && *end == '\0' && parsed > 0U &&
+                   parsed <= MOBITOOL_TIMEOUT_MS ?
+               (unsigned)parsed :
+               MOBITOOL_TIMEOUT_MS;
+}
+
 static bool capture_child_output(int descriptor, MereaderTuiString *output, bool *eof, MereaderTuiError *error) {
     char buffer[4096];
     while (true) {
@@ -298,13 +312,14 @@ static bool run_mobitool(const char *path, const char *output_directory, const c
         terminate_process_group(child, child_reaped, &child_status);
         return false;
     }
-    if (started > UINT64_MAX - MOBITOOL_TIMEOUT_MS) {
+    const unsigned timeout_ms = mobitool_timeout_ms();
+    if (started > UINT64_MAX - timeout_ms) {
         close(descriptors[0]);
         terminate_process_group(child, child_reaped, &child_status);
         mereader_tui_error_set(error, MEREADER_TUI_ERROR_INTERNAL, "mobitool timeout value overflow");
         return false;
     }
-    uint64_t deadline = started + MOBITOOL_TIMEOUT_MS;
+    uint64_t deadline = started + timeout_ms;
     bool success = true;
     while (!child_reaped || !pipe_eof) {
         if (!pipe_eof && !capture_child_output(descriptors[0], &captured, &pipe_eof, error)) {
@@ -336,7 +351,7 @@ static bool run_mobitool(const char *path, const char *output_directory, const c
         }
         if (now >= deadline) {
             mereader_tui_error_set(error, MEREADER_TUI_ERROR_EXTERNAL, "mobitool exceeded the %u ms timeout",
-                           MOBITOOL_TIMEOUT_MS);
+                           timeout_ms);
             success = false;
             break;
         }
@@ -443,7 +458,12 @@ static char *diagnostic_summary(const char *diagnostics, MereaderTuiError *error
         unsigned char value = (unsigned char) summary[index];
         if (value == '\r' || value == '\n' || value == '\t') {
             summary[index] = ' ';
-        } else if (value < 0x20U || value == 0x7fU) {
+        } else if (value == 0xc2U && index + 1U < length &&
+                   (unsigned char)summary[index + 1U] >= 0x80U &&
+                   (unsigned char)summary[index + 1U] <= 0x9fU) {
+            summary[index] = '?';
+            summary[++index] = '?';
+        } else if (value < 0x20U || (value >= 0x7fU && value <= 0x9fU)) {
             summary[index] = '?';
         }
     }
