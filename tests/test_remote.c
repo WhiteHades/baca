@@ -3,6 +3,7 @@
 #include "mereader-tui/remote.h"
 
 #include <arpa/inet.h>
+#include <dirent.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <netinet/in.h>
@@ -13,6 +14,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 static bool remote_write_all(int descriptor, const char *data, size_t length) {
@@ -140,6 +142,89 @@ static bool remote_url(char output[256], uint16_t port, const char *path) {
     return length > 0 && (size_t)length < 256U;
 }
 
+static bool remote_secure_url(char output[256], uint16_t port, const char *path) {
+    const int length = snprintf(output, 256U, "https://127.0.0.1:%u%s", (unsigned)port, path);
+    return length > 0 && (size_t)length < 256U;
+}
+
+static void remote_pause(void) {
+    struct timespec pause = {.tv_nsec = 10000000L};
+    while (nanosleep(&pause, &pause) != 0 && errno == EINTR) {
+    }
+}
+
+static pid_t remote_tls_server_start(uint16_t *http_port, uint16_t *tls_port, char **port_file) {
+    if (!mereader_tui_test_mkdir("remote-tls")) {
+        return -1;
+    }
+    *port_file = mereader_tui_test_path("remote-tls/ports");
+    if (*port_file == NULL) {
+        return -1;
+    }
+    (void)unlink(*port_file);
+    const pid_t child = fork();
+    if (child == 0) {
+        (void)execlp("python3", "python3", "tests/remote_tls_server.py", *port_file,
+                     "tests/fixtures/remote-test-cert.pem", "tests/fixtures/remote-test-key.pem",
+                     (char *)NULL);
+        _exit(127);
+    }
+    if (child < 0) {
+        free(*port_file);
+        *port_file = NULL;
+        return -1;
+    }
+
+    for (unsigned attempt = 0U; attempt < 300U; ++attempt) {
+        MereaderTuiError error = {0};
+        MereaderTuiBuffer ports = {0};
+        if (mereader_tui_read_file(*port_file, &ports, &error) &&
+            sscanf((const char *)ports.data, "%hu %hu", http_port, tls_port) == 2 &&
+            *http_port != 0U && *tls_port != 0U) {
+            mereader_tui_buffer_free(&ports);
+            return child;
+        }
+        mereader_tui_buffer_free(&ports);
+        int status = 0;
+        const pid_t waited = waitpid(child, &status, WNOHANG);
+        if (waited == child) {
+            free(*port_file);
+            *port_file = NULL;
+            return -1;
+        }
+        remote_pause();
+    }
+    remote_server_stop(child);
+    free(*port_file);
+    *port_file = NULL;
+    return -1;
+}
+
+static size_t remote_directory_entries(const char *path) {
+    DIR *directory = opendir(path);
+    if (directory == NULL) {
+        return errno == ENOENT ? 0U : SIZE_MAX;
+    }
+    size_t count = 0U;
+    for (struct dirent *entry = readdir(directory); entry != NULL; entry = readdir(directory)) {
+        if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
+            ++count;
+        }
+    }
+    return closedir(directory) == 0 ? count : SIZE_MAX;
+}
+
+static bool remote_rejected_without_cache(const char *url, const char *cache_directory,
+                                          MereaderTuiError *error) {
+    const size_t before = remote_directory_entries(cache_directory);
+    MereaderTuiRemoteFile file = {0};
+    const bool rejected = before != SIZE_MAX && !mereader_tui_remote_fetch(url, &file, error) &&
+                          file.url == NULL && file.path == NULL &&
+                          remote_directory_entries(cache_directory) == before;
+    mereader_tui_remote_file_free(&file);
+    return rejected;
+}
+
 static MereaderTuiTestResult test_fetch_redirect_limits_and_offline_cache(void) {
     uint16_t port = 0U;
     const pid_t server = remote_server_start(&port);
@@ -190,13 +275,33 @@ static MereaderTuiTestResult test_fetch_redirect_limits_and_offline_cache(void) 
     return MEREADER_TUI_TEST_PASS;
 }
 
-static MereaderTuiTestResult test_rejects_credentials_and_non_http_urls(void) {
+static MereaderTuiTestResult test_url_policy_rejects_credentials_and_unapproved_schemes(void) {
     MereaderTuiRemoteFile file = {0};
     MereaderTuiError error = {0};
     TEST_ASSERT(mereader_tui_remote_is_url("HTTP://example.test/book.epub"));
     TEST_ASSERT(mereader_tui_remote_is_url("https://example.test/book.epub"));
     TEST_ASSERT(!mereader_tui_remote_is_url("ftp://example.test/book.epub"));
     TEST_ASSERT(!mereader_tui_remote_is_url("/books/http://example.epub"));
+    TEST_ASSERT(mereader_tui_remote_validate_url("HTTP://example.test/book.epub#chapter", &error));
+    TEST_ASSERT(mereader_tui_remote_validate_url("https://example.test/book.epub", &error));
+    TEST_ASSERT(!mereader_tui_remote_validate_url("file:///etc/passwd", &error));
+    TEST_ASSERT_ERROR(error, MEREADER_TUI_ERROR_UNSUPPORTED);
+    mereader_tui_error_clear(&error);
+    TEST_ASSERT(!mereader_tui_remote_validate_url("mailto:reader@example.test", &error));
+    TEST_ASSERT_ERROR(error, MEREADER_TUI_ERROR_UNSUPPORTED);
+    mereader_tui_error_clear(&error);
+    TEST_ASSERT(!mereader_tui_remote_validate_url("custom-handler:payload", &error));
+    TEST_ASSERT_ERROR(error, MEREADER_TUI_ERROR_UNSUPPORTED);
+    mereader_tui_error_clear(&error);
+    TEST_ASSERT(!mereader_tui_remote_validate_url("//example.test/book.epub", &error));
+    TEST_ASSERT_ERROR(error, MEREADER_TUI_ERROR_ARGUMENT);
+    mereader_tui_error_clear(&error);
+    TEST_ASSERT(!mereader_tui_remote_validate_url("https://user:secret@example.test/book.epub", &error));
+    TEST_ASSERT_ERROR(error, MEREADER_TUI_ERROR_ARGUMENT);
+    mereader_tui_error_clear(&error);
+    TEST_ASSERT(!mereader_tui_remote_validate_url("https://[invalid", &error));
+    TEST_ASSERT_ERROR(error, MEREADER_TUI_ERROR_ARGUMENT);
+    mereader_tui_error_clear(&error);
     TEST_ASSERT(!mereader_tui_remote_fetch("ftp://example.test/book.epub", &file, &error));
     TEST_ASSERT_ERROR(error, MEREADER_TUI_ERROR_UNSUPPORTED);
     mereader_tui_error_clear(&error);
@@ -208,12 +313,83 @@ static MereaderTuiTestResult test_rejects_credentials_and_non_http_urls(void) {
     return MEREADER_TUI_TEST_PASS;
 }
 
+static MereaderTuiTestResult test_tls_redirects_failures_and_partial_cleanup(void) {
+    uint16_t http_port = 0U;
+    uint16_t tls_port = 0U;
+    char *port_file = NULL;
+    const pid_t server = remote_tls_server_start(&http_port, &tls_port, &port_file);
+    TEST_ASSERT(server > 0);
+
+    char plain[256] = {0};
+    char redirect[256] = {0};
+    char downgrade[256] = {0};
+    char credentials[256] = {0};
+    char loop[256] = {0};
+    char truncated[256] = {0};
+    char interrupted[256] = {0};
+    TEST_ASSERT(remote_secure_url(plain, tls_port, "/plain"));
+    TEST_ASSERT(remote_secure_url(redirect, tls_port, "/redirect"));
+    TEST_ASSERT(remote_secure_url(downgrade, tls_port, "/downgrade"));
+    TEST_ASSERT(remote_secure_url(credentials, tls_port, "/credentials"));
+    TEST_ASSERT(remote_secure_url(loop, tls_port, "/loop"));
+    TEST_ASSERT(remote_secure_url(truncated, tls_port, "/truncated"));
+    TEST_ASSERT(remote_secure_url(interrupted, tls_port, "/interrupted"));
+
+    MereaderTuiError error = {0};
+    char *cache_directory = mereader_tui_xdg_cache_path("downloads", &error);
+    TEST_ASSERT_MSG(cache_directory != NULL, "%s", error.message);
+    TEST_ASSERT(remote_rejected_without_cache(plain, cache_directory, &error));
+    TEST_ASSERT_ERROR(error, MEREADER_TUI_ERROR_EXTERNAL);
+    mereader_tui_error_clear(&error);
+
+    TEST_ASSERT(setenv("MEREADER_TUI_TEST_CA_BUNDLE", "tests/fixtures/remote-test-cert.pem", 1) == 0);
+    MereaderTuiRemoteFile file = {0};
+    TEST_ASSERT_MSG(mereader_tui_remote_fetch(plain, &file, &error), "%s", error.message);
+    TEST_ASSERT_STR(mereader_tui_path_extension(file.path), ".txt");
+    MereaderTuiBuffer contents = {0};
+    TEST_ASSERT(mereader_tui_read_file(file.path, &contents, &error));
+    TEST_ASSERT_SIZE(contents.length, sizeof("secure remote text\n") - 1U);
+    TEST_ASSERT(memcmp(contents.data, "secure remote text\n", contents.length) == 0);
+    mereader_tui_buffer_free(&contents);
+    mereader_tui_remote_file_free(&file);
+
+    TEST_ASSERT_MSG(mereader_tui_remote_fetch(redirect, &file, &error), "%s", error.message);
+    mereader_tui_remote_file_free(&file);
+    struct stat directory_status;
+    TEST_ASSERT(stat(cache_directory, &directory_status) == 0 && S_ISDIR(directory_status.st_mode));
+    TEST_ASSERT((directory_status.st_mode & 0777U) == 0700U);
+
+    TEST_ASSERT(remote_rejected_without_cache(downgrade, cache_directory, &error));
+    TEST_ASSERT_ERROR(error, MEREADER_TUI_ERROR_UNSUPPORTED);
+    mereader_tui_error_clear(&error);
+    TEST_ASSERT(remote_rejected_without_cache(credentials, cache_directory, &error));
+    TEST_ASSERT_ERROR(error, MEREADER_TUI_ERROR_ARGUMENT);
+    mereader_tui_error_clear(&error);
+    TEST_ASSERT(remote_rejected_without_cache(loop, cache_directory, &error));
+    TEST_ASSERT_ERROR(error, MEREADER_TUI_ERROR_EXTERNAL);
+    mereader_tui_error_clear(&error);
+    TEST_ASSERT(remote_rejected_without_cache(truncated, cache_directory, &error));
+    TEST_ASSERT_ERROR(error, MEREADER_TUI_ERROR_EXTERNAL);
+    mereader_tui_error_clear(&error);
+    TEST_ASSERT(remote_rejected_without_cache(interrupted, cache_directory, &error));
+    TEST_ASSERT_ERROR(error, MEREADER_TUI_ERROR_EXTERNAL);
+
+    TEST_ASSERT(unsetenv("MEREADER_TUI_TEST_CA_BUNDLE") == 0);
+    remote_server_stop(server);
+    (void)unlink(port_file);
+    free(port_file);
+    free(cache_directory);
+    return MEREADER_TUI_TEST_PASS;
+}
+
 const MereaderTuiTestCase *mereader_tui_remote_test_cases(size_t *count) {
     static const MereaderTuiTestCase cases[] = {
         {.name = "fetch_redirect_limits_and_offline_cache",
          .function = test_fetch_redirect_limits_and_offline_cache},
-        {.name = "rejects_credentials_and_non_http_urls",
-         .function = test_rejects_credentials_and_non_http_urls},
+        {.name = "url_policy_rejects_credentials_and_unapproved_schemes",
+         .function = test_url_policy_rejects_credentials_and_unapproved_schemes},
+        {.name = "tls_redirects_failures_and_partial_cleanup",
+         .function = test_tls_redirects_failures_and_partial_cleanup},
     };
     *count = MEREADER_TUI_ARRAY_LEN(cases);
     return cases;

@@ -34,6 +34,10 @@ export TMPDIR="$root/tmp"
 export LC_ALL=C
 unset MEREADER_TUI_LIBRARY_PATH
 
+command -v python3 >/dev/null 2>&1 || fail missing_python3
+command -v sqlite3 >/dev/null 2>&1 || fail missing_sqlite3
+command -v timeout >/dev/null 2>&1 || fail missing_timeout
+
 help_output=$("$binary" --help 2>&1) || fail help
 case $help_output in
     *"usage: mereader-tui"*"TUI ebook reader"*"--doctor"*"--history"*) ;;
@@ -77,27 +81,23 @@ esac
 [ -f "$XDG_CACHE_HOME/mereader-tui/mereader-tui.db" ] || fail history
 pass history
 
-if ! command -v timeout >/dev/null 2>&1; then
-    printf 'SKIP cli.library_default: timeout unavailable\n'
-else
-    library_output=$(printf '\033q' |
-        TERM=xterm-256color timeout 10s "$binary" 2>&1) || fail library_default
-    case $library_output in
-        *"mereader-tui"*"Paste the path to your book directory"*) ;;
-        *) fail library_default ;;
-    esac
-    pass library_default
+library_output=$(printf '\033q' |
+    TERM=xterm-256color timeout 10s "$binary" 2>&1) || fail library_default
+case $library_output in
+    *"mereader-tui"*"Paste the path to your book directory"*) ;;
+    *) fail library_default ;;
+esac
+pass library_default
 
-    mkdir -p "$root/library"
-    library_override_output=$(printf q |
-        MEREADER_TUI_LIBRARY_PATH="$root/library" TERM=xterm-256color timeout 10s "$binary" 2>&1) ||
-        fail library_override
-    case $library_override_output in
-        *"mereader-tui / all books"*) ;;
-        *) fail library_override ;;
-    esac
-    pass library_override
-fi
+mkdir -p "$root/library"
+library_override_output=$(printf q |
+    MEREADER_TUI_LIBRARY_PATH="$root/library" TERM=xterm-256color timeout 10s "$binary" 2>&1) ||
+    fail library_override
+case $library_override_output in
+    *"mereader-tui / all books"*) ;;
+    *) fail library_override ;;
+esac
+pass library_override
 
 if number_output=$("$binary" 1 2>&1); then
     fail missing_history_number
@@ -108,34 +108,28 @@ case $number_output in
 esac
 pass missing_history_number
 
-if command -v sqlite3 >/dev/null 2>&1; then
-    book="$root/control.epub"
-    : > "$book"
-    database="$XDG_CACHE_HOME/mereader-tui/mereader-tui.db"
-    sqlite3 "$database" \
-        "INSERT OR REPLACE INTO reading_history(filepath,title,author,reading_progress,last_read) VALUES("\
+book="$root/control.epub"
+: > "$book"
+database="$XDG_CACHE_HOME/mereader-tui/mereader-tui.db"
+sqlite3 "$database" \
+    "INSERT OR REPLACE INTO reading_history(filepath,title,author,reading_progress,last_read) VALUES("\
 "'$book','Bad'||char(10)||'Title'||char(9)||'Name'||char(27)||'[31m',"\
 "'Auth'||char(127)||'or',0.5,'2026-07-18 12:00:00');"
-    control_output=$("$binary" --history 2>&1) || fail unsafe_history
-    escape=$(printf '\033')
-    case $control_output in
-        *"$escape"*) fail unsafe_history ;;
-    esac
-    case $control_output in
-        *"Bad Title Name [31m"*"Auth or"*) ;;
-        *) fail unsafe_history ;;
-    esac
-    pass unsafe_history
-else
-    printf 'SKIP cli.unsafe_history: sqlite3 CLI unavailable\n'
-fi
+control_output=$("$binary" --history 2>&1) || fail unsafe_history
+escape=$(printf '\033')
+case $control_output in
+    *"$escape"*) fail unsafe_history ;;
+esac
+case $control_output in
+    *"Bad Title Name [31m"*"Auth or"*) ;;
+    *) fail unsafe_history ;;
+esac
+pass unsafe_history
 
-if command -v python3 >/dev/null 2>&1 && command -v sqlite3 >/dev/null 2>&1 &&
-    command -v timeout >/dev/null 2>&1; then
-    mkdir -p "$root/server"
-    printf 'Remote document\n' >"$root/server/remote.txt"
-    port_file="$root/server.port"
-    python3 - "$root/server" >"$port_file" 2>"$root/server.log" <<'PY' &
+mkdir -p "$root/server"
+printf 'Remote document\n' >"$root/server/remote.txt"
+port_file="$root/server.port"
+python3 - "$root/server" >"$port_file" 2>"$root/server.log" <<'PY' &
 import http.server
 import os
 import sys
@@ -145,37 +139,34 @@ server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), http.server.SimpleHTT
 print(server.server_port, flush=True)
 server.serve_forever()
 PY
-    server_pid=$!
-    attempts=0
-    while [ ! -s "$port_file" ]; do
-        attempts=$((attempts + 1))
-        if [ "$attempts" -ge 100 ] || ! kill -0 "$server_pid" 2>/dev/null; then
-            fail remote_server
-        fi
-        sleep 0.1
-    done
-    IFS= read -r port <"$port_file"
-    canonical_url="http://127.0.0.1:$port/remote.txt"
-    remote_url="$canonical_url#chapter"
-    (sleep 2; printf b; sleep 1; printf qq) |
-        TERM=xterm-256color timeout 15s "$binary" "$remote_url" >/dev/null 2>&1 || fail remote_open
-    [ "$(sqlite3 "$XDG_CACHE_HOME/mereader-tui/mereader-tui.db" "SELECT filepath FROM reading_history WHERE filepath = '$canonical_url'")" = "$canonical_url" ] ||
-        fail remote_history_identity
-    [ "$(sqlite3 "$XDG_CACHE_HOME/mereader-tui/mereader-tui.db" "SELECT filepath FROM bookmarks WHERE filepath = '$canonical_url'")" = "$canonical_url" ] ||
-        fail remote_bookmark_identity
-    kill "$server_pid" 2>/dev/null || :
-    wait "$server_pid" 2>/dev/null || :
-    server_pid=
-    printf q | TERM=xterm-256color timeout 15s "$binary" 1 >/dev/null 2>&1 || fail remote_offline_history
-    remote_library_output=$( (sleep 2; printf '\n'; sleep 2; printf q; sleep 1; printf q) |
-        TERM=xterm-256color timeout 20s "$binary" 2>&1) || fail remote_offline_library
-    case $remote_library_output in
-        *"Remote document"*) ;;
-        *) fail remote_offline_library ;;
-    esac
-    pass remote_open_history_bookmark_and_offline_cache
-else
-    printf 'SKIP cli.remote_open_history_bookmark_and_offline_cache: python3, sqlite3, or timeout unavailable\n'
-fi
+server_pid=$!
+attempts=0
+while [ ! -s "$port_file" ]; do
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge 100 ] || ! kill -0 "$server_pid" 2>/dev/null; then
+        fail remote_server
+    fi
+    sleep 0.1
+done
+IFS= read -r port <"$port_file"
+canonical_url="http://127.0.0.1:$port/remote.txt"
+remote_url="$canonical_url#chapter"
+(sleep 2; printf b; sleep 1; printf qq) |
+    TERM=xterm-256color timeout 15s "$binary" "$remote_url" >/dev/null 2>&1 || fail remote_open
+[ "$(sqlite3 "$XDG_CACHE_HOME/mereader-tui/mereader-tui.db" "SELECT filepath FROM reading_history WHERE filepath = '$canonical_url'")" = "$canonical_url" ] ||
+    fail remote_history_identity
+[ "$(sqlite3 "$XDG_CACHE_HOME/mereader-tui/mereader-tui.db" "SELECT filepath FROM bookmarks WHERE filepath = '$canonical_url'")" = "$canonical_url" ] ||
+    fail remote_bookmark_identity
+kill "$server_pid" 2>/dev/null || :
+wait "$server_pid" 2>/dev/null || :
+server_pid=
+printf q | TERM=xterm-256color timeout 15s "$binary" 1 >/dev/null 2>&1 || fail remote_offline_history
+remote_library_output=$( (sleep 2; printf '\n'; sleep 2; printf q; sleep 1; printf q) |
+    TERM=xterm-256color timeout 20s "$binary" 2>&1) || fail remote_offline_library
+case $remote_library_output in
+    *"Remote document"*) ;;
+    *) fail remote_offline_library ;;
+esac
+pass remote_open_history_bookmark_and_offline_cache
 
 printf 'SUMMARY cli passed\n'

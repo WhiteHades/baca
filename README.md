@@ -30,6 +30,7 @@ a fast, local-first terminal ebook reader and calibre library manager for linux.
 - finds any indexed book through an independent picker with cover and metadata details
 - saves reading progress and bookmarks automatically
 - opens local files and http or https urls with a private offline cache
+- opens clicked ebook links only when they are credential-free http or https urls
 - renders images with kitty graphics, true-color ansi, or a text fallback
 - provides regular expression search, a table of contents, metadata, links, themes, and configurable keys
 
@@ -55,7 +56,7 @@ git submodule update --init --recursive
 
 ```sh
 sudo apt update
-sudo apt install build-essential pkg-config libncurses-dev libsqlite3-dev \
+sudo apt install build-essential pkg-config python3 sqlite3 libncurses-dev libsqlite3-dev \
   libglib2.0-dev libxml2-dev libzip-dev libarchive-dev libpcre2-dev \
   libgdk-pixbuf-2.0-dev libpoppler-glib-dev libcairo2-dev \
   libcurl4-openssl-dev librsvg2-common webp-pixbuf-loader
@@ -64,7 +65,7 @@ sudo apt install build-essential pkg-config libncurses-dev libsqlite3-dev \
 ### fedora
 
 ```sh
-sudo dnf install gcc make pkgconf-pkg-config ncurses-devel sqlite-devel \
+sudo dnf install gcc make pkgconf-pkg-config python3 ncurses-devel sqlite sqlite-devel \
   glib2-devel libxml2-devel libzip-devel libarchive-devel pcre2-devel \
   gdk-pixbuf2-devel poppler-glib-devel cairo-devel libcurl-devel librsvg2
 ```
@@ -72,7 +73,7 @@ sudo dnf install gcc make pkgconf-pkg-config ncurses-devel sqlite-devel \
 ### arch linux
 
 ```sh
-sudo pacman -S --needed base-devel pkgconf ncurses sqlite glib2 libxml2 \
+sudo pacman -S --needed base-devel pkgconf python ncurses sqlite glib2 libxml2 \
   libzip libarchive pcre2 gdk-pixbuf2 poppler-glib cairo curl librsvg
 ```
 
@@ -197,7 +198,9 @@ make installcheck  # staged install and uninstall
 make format        # format c sources and headers
 ```
 
-fff is pinned as a git submodule, so builds use a reviewed source revision and a locked cargo dependency graph.
+fff is pinned as a git submodule, so builds use a reviewed source revision and a locked cargo dependency graph. see the [dependency audit](docs/dependency-audit.md) for the reviewed revision, advisory reachability, and next review date.
+
+python, the sqlite command-line client, and `timeout` are test-only tools. the installed program does not invoke them.
 
 ## limits
 

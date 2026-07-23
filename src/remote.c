@@ -63,6 +63,18 @@ static bool mereader_tui_remote_normalize_url(const char *input, char **normaliz
         mereader_tui_error_set(error, MEREADER_TUI_ERROR_ARGUMENT, "invalid remote URL");
         return false;
     }
+    const char *colon = strchr(input, ':');
+    const char *separator = strpbrk(input, "/?#");
+    if (colon != nullptr && (separator == nullptr || colon < separator)) {
+        const size_t scheme_length = (size_t)(colon - input);
+        const bool http = scheme_length == 4U && g_ascii_strncasecmp(input, "http", 4U) == 0;
+        const bool https = scheme_length == 5U && g_ascii_strncasecmp(input, "https", 5U) == 0;
+        if (!http && !https) {
+            mereader_tui_error_set(error, MEREADER_TUI_ERROR_UNSUPPORTED,
+                           "only HTTP and HTTPS URLs are supported");
+            return false;
+        }
+    }
 
     CURLU *url = curl_url();
     if (url == nullptr) {
@@ -77,6 +89,12 @@ static bool mereader_tui_remote_normalize_url(const char *input, char **normaliz
     if (status == CURLUE_OK) {
         status = curl_url_get(url, CURLUPART_SCHEME, &curl_scheme, 0U);
     }
+    if (status == CURLUE_OK && mereader_tui_casecmp(curl_scheme, "http") != 0 &&
+        mereader_tui_casecmp(curl_scheme, "https") != 0) {
+        mereader_tui_error_set(error, MEREADER_TUI_ERROR_UNSUPPORTED,
+                       "only HTTP and HTTPS URLs are supported");
+        goto failure;
+    }
     if (status == CURLUE_OK) {
         status = curl_url_get(url, CURLUPART_HOST, &host, 0U);
     }
@@ -85,10 +103,6 @@ static bool mereader_tui_remote_normalize_url(const char *input, char **normaliz
     if (status != CURLUE_OK || curl_scheme == nullptr || host == nullptr || host[0] == '\0') {
         mereader_tui_error_set(error, MEREADER_TUI_ERROR_ARGUMENT, "invalid remote URL: %s",
                        status == CURLUE_OK ? "missing host" : curl_url_strerror(status));
-        goto failure;
-    }
-    if (mereader_tui_casecmp(curl_scheme, "http") != 0 && mereader_tui_casecmp(curl_scheme, "https") != 0) {
-        mereader_tui_error_set(error, MEREADER_TUI_ERROR_UNSUPPORTED, "only HTTP and HTTPS URLs are supported");
         goto failure;
     }
     if (has_user || has_password) {
@@ -141,6 +155,18 @@ failure:
     curl_free(password);
     curl_url_cleanup(url);
     return false;
+}
+
+bool mereader_tui_remote_validate_url(const char *url, MereaderTuiError *error) {
+    mereader_tui_error_clear(error);
+    char *normalized = nullptr;
+    char *scheme = nullptr;
+    char *path = nullptr;
+    const bool valid = mereader_tui_remote_normalize_url(url, &normalized, &scheme, &path, error);
+    free(normalized);
+    free(scheme);
+    free(path);
+    return valid;
 }
 
 static const char *mereader_tui_remote_supported_extension(const char *path) {
@@ -309,6 +335,10 @@ static const char *mereader_tui_remote_effective_extension(const char *effective
     return extension == nullptr ? nullptr : result;
 }
 
+static bool mereader_tui_remote_is_redirect(long status) {
+    return status == 301L || status == 302L || status == 303L || status == 307L || status == 308L;
+}
+
 static bool mereader_tui_remote_download(const char *url, const char *scheme, const char *directory, const char *hash,
                                  const char *preferred_extension, char **path, MereaderTuiError *error) {
     char *template = mereader_tui_path_join(directory, ".download-XXXXXX", error);
@@ -353,12 +383,10 @@ static bool mereader_tui_remote_download(const char *url, const char *scheme, co
     MereaderTuiRemoteWriter writer = {.descriptor = descriptor};
     char curl_error[CURL_ERROR_SIZE] = {0};
     CURLcode status = CURLE_OK;
-    const char *redirect_protocols = mereader_tui_casecmp(scheme, "https") == 0 ? "https" : "http,https";
-    if ((status = curl_easy_setopt(curl, CURLOPT_URL, url)) != CURLE_OK ||
-        (status = curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https")) != CURLE_OK ||
-        (status = curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, redirect_protocols)) != CURLE_OK ||
-        (status = curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L)) != CURLE_OK ||
-        (status = curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L)) != CURLE_OK ||
+    const char *ca_bundle = getenv("MEREADER_TUI_TEST_CA_BUNDLE");
+    char *current_url = nullptr;
+    if ((status = curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https")) != CURLE_OK ||
+        (status = curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L)) != CURLE_OK ||
         (status = curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L)) != CURLE_OK ||
         (status = curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L)) != CURLE_OK ||
         (status = curl_easy_setopt(curl, CURLOPT_TIMEOUT, 120L)) != CURLE_OK ||
@@ -378,29 +406,103 @@ static bool mereader_tui_remote_download(const char *url, const char *scheme, co
                        curl_easy_strerror(status));
         goto failure;
     }
-
-    status = curl_easy_perform(curl);
-    if (writer.exceeded || status == CURLE_FILESIZE_EXCEEDED) {
-        mereader_tui_error_set(error, MEREADER_TUI_ERROR_CORRUPT, "remote document exceeds the 256 MiB download limit");
-        goto failure;
-    }
-    if (writer.saved_errno != 0) {
-        mereader_tui_error_set(error, MEREADER_TUI_ERROR_IO, "could not write remote cache file: %s", strerror(writer.saved_errno));
-        goto failure;
-    }
-    if (status != CURLE_OK) {
-        mereader_tui_error_set(error, MEREADER_TUI_ERROR_EXTERNAL, "could not download '%s': %s", url,
-                       curl_error[0] != '\0' ? curl_error : curl_easy_strerror(status));
+    if (ca_bundle != nullptr && ca_bundle[0] != '\0' &&
+        (status = curl_easy_setopt(curl, CURLOPT_CAINFO, ca_bundle)) != CURLE_OK) {
+        mereader_tui_error_set(error, MEREADER_TUI_ERROR_EXTERNAL, "could not configure test CA bundle: %s",
+                       curl_easy_strerror(status));
         goto failure;
     }
 
+    current_url = mereader_tui_strdup(url, error);
+    if (current_url == nullptr) {
+        goto failure;
+    }
+    const bool initial_https = mereader_tui_casecmp(scheme, "https") == 0;
     char *content_type = nullptr;
-    char *effective_url = nullptr;
-    (void)curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &content_type);
-    (void)curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &effective_url);
+    for (unsigned redirects = 0U;;) {
+        if (ftruncate(descriptor, 0) != 0 || lseek(descriptor, 0, SEEK_SET) < 0) {
+            const int saved_errno = errno;
+            mereader_tui_error_set(error, MEREADER_TUI_ERROR_IO, "could not reset remote cache file: %s",
+                           strerror(saved_errno));
+            goto failure;
+        }
+        writer.length = 0U;
+        writer.saved_errno = 0;
+        writer.exceeded = false;
+        curl_error[0] = '\0';
+        if ((status = curl_easy_setopt(curl, CURLOPT_URL, current_url)) != CURLE_OK) {
+            mereader_tui_error_set(error, MEREADER_TUI_ERROR_EXTERNAL, "could not configure HTTP request: %s",
+                           curl_easy_strerror(status));
+            goto failure;
+        }
+
+        status = curl_easy_perform(curl);
+        if (writer.exceeded || status == CURLE_FILESIZE_EXCEEDED) {
+            mereader_tui_error_set(error, MEREADER_TUI_ERROR_CORRUPT,
+                           "remote document exceeds the 256 MiB download limit");
+            goto failure;
+        }
+        if (writer.saved_errno != 0) {
+            mereader_tui_error_set(error, MEREADER_TUI_ERROR_IO, "could not write remote cache file: %s",
+                           strerror(writer.saved_errno));
+            goto failure;
+        }
+        if (status != CURLE_OK) {
+            mereader_tui_error_set(error, MEREADER_TUI_ERROR_EXTERNAL, "could not download '%s': %s", current_url,
+                           curl_error[0] != '\0' ? curl_error : curl_easy_strerror(status));
+            goto failure;
+        }
+
+        long response_status = 0L;
+        (void)curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_status);
+        if (mereader_tui_remote_is_redirect(response_status)) {
+            char *redirect_url = nullptr;
+            (void)curl_easy_getinfo(curl, CURLINFO_REDIRECT_URL, &redirect_url);
+            if (redirect_url == nullptr || redirect_url[0] == '\0') {
+                mereader_tui_error_set(error, MEREADER_TUI_ERROR_EXTERNAL,
+                               "remote server returned a redirect without a location");
+                goto failure;
+            }
+            if (redirects >= 5U) {
+                mereader_tui_error_set(error, MEREADER_TUI_ERROR_EXTERNAL,
+                               "remote document exceeded the 5 redirect limit");
+                goto failure;
+            }
+
+            char *normalized = nullptr;
+            char *redirect_scheme = nullptr;
+            char *redirect_path = nullptr;
+            if (!mereader_tui_remote_normalize_url(redirect_url, &normalized, &redirect_scheme,
+                                                   &redirect_path, error)) {
+                goto failure;
+            }
+            if (initial_https && mereader_tui_casecmp(redirect_scheme, "https") != 0) {
+                mereader_tui_error_set(error, MEREADER_TUI_ERROR_UNSUPPORTED,
+                               "HTTPS downloads cannot redirect to HTTP");
+                free(normalized);
+                free(redirect_scheme);
+                free(redirect_path);
+                goto failure;
+            }
+            free(redirect_scheme);
+            free(redirect_path);
+            free(current_url);
+            current_url = normalized;
+            ++redirects;
+            continue;
+        }
+        if (response_status < 200L || response_status >= 300L) {
+            mereader_tui_error_set(error, MEREADER_TUI_ERROR_EXTERNAL,
+                           "remote server returned HTTP status %ld", response_status);
+            goto failure;
+        }
+        (void)curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &content_type);
+        break;
+    }
+
     const char *extension = preferred_extension;
     if (extension == nullptr) {
-        extension = mereader_tui_remote_effective_extension(effective_url);
+        extension = mereader_tui_remote_effective_extension(current_url);
     }
     if (extension == nullptr) {
         extension = mereader_tui_remote_content_extension(content_type);
@@ -432,12 +534,14 @@ static bool mereader_tui_remote_download(const char *url, const char *scheme, co
         mereader_tui_error_set(error, MEREADER_TUI_ERROR_IO, "could not publish remote cache file: %s", strerror(saved_errno));
         goto failure;
     }
+    free(current_url);
     free(template);
     curl_easy_cleanup(curl);
     *path = final_path;
     return true;
 
 failure:
+    free(current_url);
     if (descriptor >= 0) {
         (void)close(descriptor);
     }

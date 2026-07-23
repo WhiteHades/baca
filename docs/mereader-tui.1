@@ -23,7 +23,10 @@ preferred when one book has several formats.
 .PP
 http and https documents are downloaded into a private cache and can be
 reopened offline. urls with credentials are rejected, tls verification is
-enabled, and each download is limited to 256 mib.
+enabled, https redirects cannot downgrade to http, and each download is
+limited to 256 mib. links clicked inside documents are opened only when they
+are credential-free http or https urls; local-file, mail, and custom-handler
+links are rejected.
 .SH options
 .TP
 .BR \-h , " " \-\-help

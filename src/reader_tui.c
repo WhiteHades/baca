@@ -2,6 +2,7 @@
 #include "mereader-tui/document_backend.h"
 #include "mereader-tui/graphics.h"
 #include "mereader-tui/platform.h"
+#include "mereader-tui/remote.h"
 #include "terminal_runtime.h"
 #include "text_input.h"
 
@@ -2350,6 +2351,10 @@ static bool follow_link(MereaderTuiTuiState *state, const char *link,
   const bool pdf_page_link = state->app->document.format == MEREADER_TUI_FORMAT_PDF &&
                              strncmp(link, "pdf://page/", 11U) == 0;
   if (!pdf_page_link && mereader_tui_is_external_uri(link)) {
+    if (!mereader_tui_remote_validate_url(link, &error)) {
+      open_alert(state, error.message);
+      return false;
+    }
     if (!open_external(state, link, NULL, &error)) {
       open_alert(state, error.message);
       return false;

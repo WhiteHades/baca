@@ -647,6 +647,38 @@ static char *create_pdf_fixture(const char *relative, bool huge_page, bool varie
     return path;
 }
 
+static char *create_unsafe_link_pdf_fixture(const char *relative) {
+    char *path = mereader_tui_test_path(relative);
+    if (path == NULL) {
+        return NULL;
+    }
+    MereaderTuiError error = {0};
+    char *directory = mereader_tui_path_dirname(path, &error);
+    if (directory == NULL || !mereader_tui_mkdirs(directory, &error)) {
+        free(directory);
+        free(path);
+        return NULL;
+    }
+    free(directory);
+
+    cairo_surface_t *surface = cairo_pdf_surface_create(path, 300.0, 400.0);
+    cairo_t *context = cairo_create(surface);
+    pdf_draw_text(context, 30.0, 40.0, "Unsafe link fixture");
+    cairo_show_page(context);
+    const int outline = cairo_pdf_surface_add_outline(
+        surface, CAIRO_PDF_OUTLINE_ROOT, "Blocked local reference",
+        "uri='file:///etc/passwd'", 0);
+    cairo_destroy(context);
+    cairo_surface_finish(surface);
+    const cairo_status_t status = cairo_surface_status(surface);
+    cairo_surface_destroy(surface);
+    if (outline <= 0 || status != CAIRO_STATUS_SUCCESS) {
+        free(path);
+        return NULL;
+    }
+    return path;
+}
+
 static char *create_many_page_pdf_fixture(const char *relative) {
     char *path = mereader_tui_test_path(relative);
     if (path == NULL) {
@@ -1011,6 +1043,98 @@ cleanup:
     free(config_root);
     free(path);
     return ok;
+}
+
+static bool run_pdf_unsafe_link_pty(MereaderTuiString *output, MereaderTuiString *opened) {
+    char *path = create_unsafe_link_pdf_fixture("pdf/unsafe-link/reader.pdf");
+    if (path == NULL ||
+        !mereader_tui_test_write_text(
+            "pdf/unsafe-link/config/mereader-tui/config.ini",
+            "[General]\nImageMode=placeholder\nMaxTextWidth=80\nPageScrollDuration=0\n")) {
+        free(path);
+        return false;
+    }
+    char *config_root = mereader_tui_test_path("pdf/unsafe-link/config");
+    if (config_root == NULL) {
+        free(path);
+        return false;
+    }
+    int opener_pipe[2] = {-1, -1};
+    if (pipe(opener_pipe) != 0) {
+        free(config_root);
+        free(path);
+        return false;
+    }
+
+    struct winsize size = {
+        .ws_row = 12U,
+        .ws_col = 80U,
+        .ws_xpixel = 800U,
+        .ws_ypixel = 240U,
+    };
+    int master = -1;
+    (void)fflush(NULL);
+    const pid_t child = forkpty(&master, NULL, NULL, &size);
+    if (child < 0) {
+        (void)close(opener_pipe[0]);
+        (void)close(opener_pipe[1]);
+        free(config_root);
+        free(path);
+        return false;
+    }
+    if (child == 0) {
+        (void)close(opener_pipe[0]);
+        (void)setenv("TERM", "xterm-256color", 1);
+        (void)setenv("XDG_CONFIG_HOME", config_root, 1);
+        char descriptor[32] = {0};
+        (void)snprintf(descriptor, sizeof(descriptor), "%d", opener_pipe[1]);
+        (void)setenv("MEREADER_TUI_PDF_PTY_CHILD", "1", 1);
+        (void)setenv("MEREADER_TUI_PDF_PTY_PATH", path, 1);
+        (void)setenv("MEREADER_TUI_PDF_PTY_OPEN_FD", descriptor, 1);
+        (void)execl("./build/tests/test_mereader_tui", "test_mereader_tui", (char *)NULL);
+        _exit(127);
+    }
+
+    (void)close(opener_pipe[1]);
+    bool completed = false;
+    int status = 0;
+    bool ok = fcntl(master, F_SETFL, O_NONBLOCK) == 0 &&
+              fcntl(opener_pipe[0], F_SETFL, O_NONBLOCK) == 0 &&
+              pdf_wait_for(master, output, 0U, "Unsafe link fixture");
+    size_t start = output->length;
+    ok = ok && pdf_write_all(master, "\t", 1U) &&
+         pdf_wait_for(master, output, start, "Table of Contents");
+    start = output->length;
+    ok = ok && pdf_write_all(master, "\n", 1U) &&
+         pdf_wait_for(master, output, start, "only HTTP and HTTPS URLs are supported") &&
+         pdf_drain_until_idle(opener_pipe[0], opened) && opened->length == 0U &&
+         pdf_write_all(master, "qq", 2U);
+    for (unsigned attempt = 0U; attempt < 750U && ok; ++attempt) {
+        (void)pdf_drain_fd(master, output);
+        const pid_t waited = waitpid(child, &status, WNOHANG);
+        if (waited == child) {
+            completed = true;
+            break;
+        }
+        if (waited < 0) {
+            ok = false;
+            break;
+        }
+        struct timespec pause = {.tv_nsec = 20000000L};
+        (void)nanosleep(&pause, NULL);
+    }
+    if (!completed) {
+        (void)kill(child, SIGKILL);
+        (void)waitpid(child, &status, 0);
+    }
+    (void)pdf_drain_fd(master, output);
+    (void)pdf_drain_fd(opener_pipe[0], opened);
+    (void)close(master);
+    (void)close(opener_pipe[0]);
+    free(config_root);
+    free(path);
+    return ok && completed && WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
+           opened->length == 0U;
 }
 
 static bool pdf_saved_progress(const char *cache_root, const char *path, double *progress) {
@@ -2193,6 +2317,23 @@ static MereaderTuiTestResult test_tui_fixed_toggle_search_links_resize_and_signa
     return test_result;
 }
 
+static MereaderTuiTestResult test_tui_rejects_unsafe_external_link(void) {
+    MereaderTuiString output = {0};
+    MereaderTuiString opened = {0};
+    const bool ran = run_pdf_unsafe_link_pty(&output, &opened);
+    MereaderTuiTestResult result = MEREADER_TUI_TEST_PASS;
+    if (!ran) {
+        result = mereader_tui_test_fail_at(
+            __FILE__, __LINE__,
+            "unsafe PDF link PTY failed or invoked the opener; opened: %s; output: %.800s",
+            opened.data == NULL ? "(empty)" : opened.data,
+            output.data == NULL ? "(empty)" : output.data);
+    }
+    mereader_tui_string_free(&opened);
+    mereader_tui_string_free(&output);
+    return result;
+}
+
 const MereaderTuiTestCase *mereader_tui_pdf_test_cases(size_t *count) {
     static const MereaderTuiTestCase cases[] = {
         {.name = "open_metadata_toc_text_links_and_cleanup",
@@ -2229,6 +2370,8 @@ const MereaderTuiTestCase *mereader_tui_pdf_test_cases(size_t *count) {
          .function = test_tui_failed_render_fallback_opens_document_and_retries_after_resize},
         {.name = "tui_fixed_toggle_search_links_resize_and_signal",
          .function = test_tui_fixed_toggle_search_links_resize_and_signal},
+        {.name = "tui_rejects_unsafe_external_link",
+         .function = test_tui_rejects_unsafe_external_link},
     };
     *count = MEREADER_TUI_ARRAY_LEN(cases);
     return cases;
