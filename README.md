@@ -36,58 +36,81 @@ a fast, local-first terminal ebook reader and calibre library manager for linux.
 
 ## install
 
-mereader-tui supports linux with a utf-8 locale. building needs gcc 14 or later, or clang 18 or later. it also needs rust 1.97, cargo, make, and `pkg-config`.
+mereader-tui supports linux with a utf-8 locale. building needs gcc 14 or later, or clang 18 or later. it also needs rust 1.97, cargo, make, and `pkg-config`. the v0.1.1 build and test flow is verified on ubuntu 24.04 lts, debian 13, fedora 43, and arch linux rolling as of july 2026.
 
-clone the repository with its pinned fff submodule:
+install the system dependencies for your distribution first.
 
-```sh
-git clone --recurse-submodules https://github.com/whitehades/mereader-tui.git
-cd mereader-tui
-rustup toolchain install 1.97.0 --profile minimal
-```
-
-if the repository was cloned without submodules, run:
-
-```sh
-git submodule update --init --recursive
-```
-
-### ubuntu and debian
+### ubuntu 24.04 lts and debian 13
 
 ```sh
 sudo apt update
-sudo apt install build-essential pkg-config python3 sqlite3 libncurses-dev libsqlite3-dev \
-  libglib2.0-dev libxml2-dev libzip-dev libarchive-dev libpcre2-dev \
-  libgdk-pixbuf-2.0-dev libpoppler-glib-dev libcairo2-dev \
-  libcurl4-openssl-dev librsvg2-common webp-pixbuf-loader
+sudo apt install git curl ca-certificates build-essential gcc-14 pkg-config python3 \
+  sqlite3 libncurses-dev libsqlite3-dev libglib2.0-dev libxml2-dev libzip-dev \
+  libarchive-dev libpcre2-dev libgdk-pixbuf-2.0-dev libpoppler-glib-dev \
+  libcairo2-dev libcurl4-openssl-dev librsvg2-common webp-pixbuf-loader
 ```
 
-### fedora
+### fedora 43
 
 ```sh
-sudo dnf install gcc make pkgconf-pkg-config python3 ncurses-devel sqlite sqlite-devel \
-  glib2-devel libxml2-devel libzip-devel libarchive-devel pcre2-devel \
-  gdk-pixbuf2-devel poppler-glib-devel cairo-devel libcurl-devel librsvg2
+sudo dnf install git curl ca-certificates gcc gcc-c++ make pkgconf-pkg-config \
+  python3 diffutils ncurses-devel sqlite sqlite-devel glib2-devel libxml2-devel \
+  libzip-devel libarchive-devel pcre2-devel gdk-pixbuf2-devel \
+  poppler-glib-devel cairo-devel libcurl-devel librsvg2
 ```
 
 ### arch linux
 
 ```sh
-sudo pacman -S --needed base-devel pkgconf python ncurses sqlite glib2 libxml2 \
-  libzip libarchive pcre2 gdk-pixbuf2 poppler-glib cairo curl librsvg
+sudo pacman -Syu
+sudo pacman -S --needed git curl ca-certificates base-devel pkgconf python ncurses \
+  sqlite glib2 libxml2 libzip libarchive pcre2 gdk-pixbuf2 poppler-glib \
+  cairo librsvg
 ```
 
-install for the current user without root:
+python and the `sqlite3`, `timeout`, and `cmp` commands are test-only tools included so `make test` and `make installcheck` can verify the checkout. the installed c program does not invoke them.
+
+install the pinned rust toolchain, then clone the release with its pinned fff submodule:
+
+```sh
+curl --proto '=https' --tlsv1.2 https://sh.rustup.rs -sSf | \
+  sh -s -- -y --profile minimal --default-toolchain 1.97.0
+. "$HOME/.cargo/env"
+git clone --branch v0.1.1 --recurse-submodules \
+  https://github.com/whitehades/mereader-tui.git
+cd mereader-tui
+```
+
+github's automatic source zip and tar archives omit the required fff submodule contents and are not supported build inputs. if the repository was cloned without submodules, run `git submodule update --init --recursive`.
+
+on ubuntu 24.04, select gcc 14 explicitly while installing for the current user:
+
+```sh
+make CC=gcc-14 doctor
+make CC=gcc-14 user-install
+```
+
+on the other verified distributions:
 
 ```sh
 make doctor
-make
 make user-install
-hash -r
-mereader-tui --doctor
 ```
 
-make sure `~/.local/bin` is in `PATH`. use `sudo make install` for a system-wide install under `/usr/local`.
+verify the installed program:
+
+```sh
+~/.local/bin/mereader-tui --doctor
+```
+
+make sure `~/.local/bin` is in `PATH`. for a system-wide install under `/usr/local`, build without root first, then install the existing build:
+
+```sh
+make CC=gcc-14                    # ubuntu 24.04
+sudo make CC=gcc-14 install
+```
+
+on the other verified distributions, use `make` followed by `sudo make install`.
 
 the install contains `mereader-tui`, `libfff_c.so`, the default config, the `mereader-tui(1)` manual, and both project licenses. rust is needed to build from source, but not to run an installed build.
 
@@ -191,6 +214,8 @@ the c adapter owns copied paths and scores. rust owns the opaque index and tempo
 
 ## development
 
+on ubuntu 24.04, use `make CC=gcc-14 test` instead of `make test-gcc`, and pass `CC=gcc-14` to `sanitize` and `installcheck`.
+
 ```sh
 make test          # native and cli tests
 make test-gcc      # clean gcc build
@@ -201,8 +226,6 @@ make format        # format c sources and headers
 ```
 
 fff is pinned as a git submodule, so builds use a reviewed source revision and a locked cargo dependency graph. see the [dependency audit](docs/dependency-audit.md) for the reviewed revision, advisory reachability, and next review date.
-
-python, the sqlite command-line client, and `timeout` are test-only tools. the installed program does not invoke them.
 
 ## limits
 
